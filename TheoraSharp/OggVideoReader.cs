@@ -1,131 +1,153 @@
-﻿using System.Collections;
-using TheoraSharp;
-using TheoraSharp.Ogg;
+﻿using TheoraSharp.Ogg;
 
 namespace TheoraSharp;
 
 public class OggVideoReader
 {
-    private static int BUFFSIZE = 8192;
+    private const int DEFAULT_BUFFER_SIZE = 8192;
 
-    private Stream inputStream;
+    private readonly int _bufferSize = DEFAULT_BUFFER_SIZE;
+    private readonly Stream _inputStream;
+    private IVideoDecoder _decoder;
 
-    private OggStream stream;
-    private SyncState oy = new();
-    private List<OggStream> streams = new();
-    private TheoraDec decoder;
-
-    public int Width => decoder?.Width ?? 0;
-    public int Height => decoder?.Height ?? 0;
-    public float Fps => decoder?.Fps ?? 0;
-
-    public OggVideoReader(Stream inp)
+    public int Width => _decoder?.Width ?? 0;
+    public int Height => _decoder?.Height ?? 0;
+    public float Fps => _decoder?.Fps ?? 0;
+    
+    public OggVideoReader(Stream input, int bufferSize = DEFAULT_BUFFER_SIZE)
     {
-        inputStream = inp;
+        _bufferSize = bufferSize;
+        _inputStream = input;
     }
 
-    public OggVideoReader(byte[] buffer)
+    public OggVideoReader(byte[] buffer, int bufferSize = DEFAULT_BUFFER_SIZE)
     {
-        inputStream = new MemoryStream(buffer);
+        _bufferSize = bufferSize;
+        _inputStream = new MemoryStream(buffer);
     }
 
-    public OggVideoReader(string fileName)
+    public OggVideoReader(string fileName, int bufferSize = DEFAULT_BUFFER_SIZE)
     {
-        inputStream = File.OpenRead(fileName);
+        _bufferSize = bufferSize;
+        _inputStream = File.OpenRead(fileName);
     }
 
-    public IEnumerator<T[]> StartReading<T>()
+    public IEnumerator<T[]> StartReading<T>(bool throwOnCorruptedPacket = true)
     {
-        int res;
-
-        var og = new Page();
-        var op = new Packet();
-
-        var stopping = false;
-        while (!stopping)
+        var page = new Page();
+        var packet = new PacketContext();
+        var streams = new List<OggStream>();
+        var reader = new SyncState();
+        
+        while (true)
         {
-            int index = oy.buffer(BUFFSIZE);
-            int read = inputStream.Read(oy.data, index, BUFFSIZE);
+            var index = reader.Buffer(_bufferSize);
+            var read = _inputStream.Read(reader.Data, index, _bufferSize);
             if (read <= 0)
-                yield break;
-
-            oy.wrote(read);
-
-            while (!stopping)
             {
-                res = oy.pageout(og);
-                if (res == 0)
+                yield break;
+            }
+
+            reader.Wrote(read);
+
+            while (true)
+            {
+                var result = reader.PageOut(page);
+                if (result == 0)
+                {
                     break; // need more data
-
-                if (res == -1)
-                {
-                    throw new Exception("Corrupted page data");
                 }
 
-                int serial = og.serialno();
-                for (int i = 0; i < streams.Count; i++)
+                if (result == -1)
                 {
-                    stream = streams[i];
-                    if (stream.serialno == serial)
+                    if (throwOnCorruptedPacket)
+                    {
+                        throw new Exception("Corrupted page data");
+                    }
+                    
+                    continue;
+                }
+
+                OggStream currentStream = null;
+                var serial = page.SerialNumber;
+                foreach (var stream in streams)
+                {
+                    currentStream = stream;
+                    if (currentStream.Serial == serial)
+                    {
                         break;
-                    stream = null;
+                    }
+                    currentStream = null;
                 }
 
-                if (stream == null)
+                if (currentStream == null)
                 {
-                    stream = new OggStream(serial);
-                    streams.Add(stream);
+                    currentStream = new OggStream(serial);
+                    streams.Add(currentStream);
                 }
 
-                res = stream.os.pagein(og);
-                if (res < 0)
+                result = currentStream.Stream.PageIn(page);
+                if (result < 0)
                 {
                     // error; stream version mismatch perhaps
                     throw new Exception("Error reading first page of Ogg bitstream data.");
                 }
 
-                while (!stopping)
+                while (true)
                 {
-                    res = stream.os.packetout(op);
-                    if (res == 0)
+                    result = currentStream.Stream.PacketOut(packet);
+                    if (result == 0)
+                    {
                         break; // need more data
+                    }
 
-                    if (res == -1)
+                    if (result == -1)
                     {
                         // missing or corrupt data at this page position
                         // no reason to complain; already complained above
                     }
                     else
                     {
-                        if (stream.bos)
+                        if (currentStream.AtBeginning)
                         {
-                            // typefind
-                            if (op.PacketBase[op.PacketPos + 1] == 0x76)
-                            {
-                                // vorbis audio
-                            }
-                            else if (op.PacketBase[op.PacketPos + 1] == 0x73)
-                            {
-                                // smoke video
-                            }
-                            else if (op.PacketBase[op.PacketPos + 1] == 0x74)
-                            {
-                                // theora video
-                                decoder ??= new TheoraDec();
-                                stream.decoder ??= decoder;
-                            }
-
-                            stream.bos = false;
+                            SetupDecoder(currentStream, packet.PacketBase[packet.PacketPos + 1]);
+                            currentStream.AtBeginning = false;
                         }
 
-                        if (stream.decoder != null)
+                        if (currentStream.Decoder == null)
                         {
-                            if (stream.decoder.ReadPacket(op))
-                                yield return stream.decoder.GetData<T>();
+                            continue;
+                        }
+
+                        if (currentStream.Decoder.ReadPacket(packet))
+                        {
+                            yield return currentStream.Decoder.GetData<T>();
                         }
                     }
                 }
             }
+        }
+    }
+
+    private void SetupDecoder(OggStream stream, byte streamType)
+    {
+        const byte VorbisAudio = 0x76;
+        const byte SmokeVideo = 0x73;
+        const byte TheoraAudio = 0x74;
+        
+        switch (streamType)
+        {
+            case VorbisAudio:
+                // vorbis audio
+                break;
+            case SmokeVideo:
+                // smoke video
+                break;
+            case TheoraAudio:
+                // theora video
+                _decoder ??= new TheoraDec();
+                stream.Decoder ??= _decoder;
+                break;
         }
     }
 }

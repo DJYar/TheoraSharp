@@ -1,216 +1,209 @@
-﻿namespace TheoraSharp.Ogg;
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+
+namespace TheoraSharp.Ogg;
 
 public class SyncState
 {
+    private readonly byte[] checksumBuffer = new byte[OggPageHeader.ChecksumLength];
 
-  public byte[] data;
-  int storage;
-  int fill;
-  int returned;
+    private int _headerLength;
+    private int _bodyLength;
+    private int _position;
+    private int _bufferSize;
+    private int _bufferFill;
+    private bool _unsynced;
 
-  int unsynced;
-  int headerbytes;
-  int bodybytes;
+    public byte[] Data { get; private set; }
 
-  public int clear(){
-    data=null;
-    return(0);
-  }
-
-  public int buffer(int size){
-    // first, clear out any space that has been previously returned
-    if(returned!=0){
-      fill-=returned;
-      if(fill>0){
-	Array.Copy(data, returned, data, 0, fill);
-      }
-      returned=0;
-    }
-
-    if(size>storage-fill){
-      // We need to extend the internal buffer
-      int newsize=size+fill+4096; // an extra page to be nice
-      if(data!=null){
-	byte[] foo=new byte[newsize];
-	Array.Copy(data, 0, foo, 0, data.Length);
-	data=foo;
-      }
-      else{
-	data=new byte[newsize];
-      }
-      storage=newsize;
-    }
-
-    // expose a segment at least as large as requested at the fill mark
-    return(fill);
-  }
-
-  public int wrote(int bytes){
-    if(fill+bytes>storage)return(-1);
-    fill+=bytes;
-    return(0);
-  }
-
-// sync the stream.  This is meant to be useful for finding page
-// boundaries.
-//
-// return values for this:
-// -n) skipped n bytes
-//  0) page not ready; more data (no bytes skipped)
-//  n) page synced at current location; page length n bytes
-  private Page pageseek=new Page();
-  private  byte[] chksum=new byte[4];
-  public int Pageseek(Page og){
-    int page=returned;
-    int next;
-    int bytes=fill-returned;
-  
-    if(headerbytes==0){
-      int _headerbytes,i;
-      if(bytes<27)return(0); // not enough for a header
-    
-    /* verify capture pattern */
-      if(data[page]!='O' ||
-	 data[page+1]!='g' ||
-	 data[page+2]!='g' ||
-	 data[page+3]!='S'){
-        headerbytes=0;
-        bodybytes=0;
-  
-        // search for possible capture
-        next=0;
-        for(int ii=0; ii<bytes-1; ii++){
-          if(data[page+1+ii]=='O'){next=page+1+ii; break;}
-        }
-        if(next==0) next=fill;
-
-        returned=next;
-        return(-(next-page));
-      }
-      _headerbytes=(data[page+26]&0xff)+27;
-      if(bytes<_headerbytes)return(0); // not enough for header + seg table
-    
-      // count up body length in the segment table
-    
-      for(i=0;i<(data[page+26]&0xff);i++){
-        bodybytes+=(data[page+27+i]&0xff);
-      }
-      headerbytes=_headerbytes;
-    }
-  
-    if(bodybytes+headerbytes>bytes)return(0);
-  
-    // The whole test page is buffered.  Verify the checksum
-    lock(chksum){
-      // Grab the checksum bytes, set the header field to zero
-    
-      Array.Copy(data, page+22, chksum, 0, 4);
-      data[page+22]=0;
-      data[page+23]=0;
-      data[page+24]=0;
-      data[page+25]=0;
-    
-      // set up a temp page struct and recompute the checksum
-      Page log=pageseek;
-      log.header_base=data;
-      log.header=page;
-      log.header_len=headerbytes;
-
-      log.body_base=data;
-      log.body=page+headerbytes;
-      log.body_len=bodybytes;
-      log.checksum();
-
-      // Compare
-      if(chksum[0]!=data[page+22] ||
-         chksum[1]!=data[page+23] ||
-         chksum[2]!=data[page+24] ||
-         chksum[3]!=data[page+25]){
-        // D'oh.  Mismatch! Corrupt page (or miscapture and not a page at all)
-        // replace the computed checksum with the one actually read in
-        Array.Copy(chksum, 0, data, page+22, 4);
-        // Bad checksum. Lose sync */
-
-        headerbytes=0;
-        bodybytes=0;
-        // search for possible capture
-        next=0;
-        for(int ii=0; ii<bytes-1; ii++){
-          if(data[page+1+ii]=='O'){next=page+1+ii; break;}
-        }
-        //next=memchr(page+1,'O',bytes-1);
-        if(next==0) next=fill;
-        returned=next;
-        return(-(next-page));
-      }
-    }
-  
-    // yes, have a whole page all ready to go
+    public int Buffer(int size)
     {
-      page=returned;
+        if (size < 0)
+            throw new ArgumentOutOfRangeException(nameof(size));
 
-      if(og!=null){
-        og.header_base=data;
-        og.header=page;
-        og.header_len=headerbytes;
-	og.body_base=data;
-        og.body=page+headerbytes;
-        og.body_len=bodybytes;
-      }
+        if (_position != 0)
+        {
+            _bufferFill -= _position;
+            if (_bufferFill > 0)
+            {
+                Array.Copy(Data, _position, Data, 0, _bufferFill);
+            }
 
-      unsynced=0;
-      returned+=(bytes=headerbytes+bodybytes);
-      headerbytes=0;
-      bodybytes=0;
-      return(bytes);
+            _position = 0;
+        }
+
+        if (size > _bufferSize - _bufferFill)
+        {
+            var newSize = size + _bufferFill + 4096;
+            if (Data != null)
+            {
+                var buffer = new byte[newSize];
+                Array.Copy(Data, 0, buffer, 0, Data.Length);
+                Data = buffer;
+            }
+            else
+            {
+                Data = new byte[newSize];
+            }
+
+            _bufferSize = newSize;
+        }
+
+        return _bufferFill;
     }
-  }
 
-
-// sync the stream and get a page.  Keep trying until we find a page.
-// Supress 'sync errors' after reporting the first.
-//
-// return values:
-//  -1) recapture (hole in data)
-//   0) need more data
-//   1) page returned
-//
-// Returns pointers into buffered data; invalidated by next call to
-// _stream, _clear, _init, or _buffer
-
-  public int pageout(Page og){
-    // all we need to do is verify a page at the head of the stream
-    // buffer.  If it doesn't verify, we look for the next potential
-    // frame
-
-    while(true){
-      int ret=Pageseek(og);
-      if(ret>0){
-        // have a page
-        return(1);
-      }
-      if(ret==0){
-        // need more data
-        return(0);
-      }
-    
-      // head did not start a synced page... skipped some bytes
-      if(unsynced==0){
-        unsynced=1;
-        return(-1);
-      }
-      // loop. keep looking
+    public void Clear()
+    {
+        Data = null;
     }
-  }
 
-// clear things to an initial state.  Good to call, eg, before seeking
-  public int reset(){
-    fill=0;
-    returned=0;
-    unsynced=0;
-    headerbytes=0;
-    bodybytes=0;
-    return(0);
-  }
-  public void init(){}
+    public int PageOut(Page page)
+    {
+        while (true)
+        {
+            var result = PageSeek(page);
+            if (result > 0)
+            {
+                return 1;
+            }
+
+            if (result == 0)
+            {
+                return 0;
+            }
+
+            if (!_unsynced)
+            {
+                _unsynced = true;
+                return -1;
+            }
+        }
+    }
+
+    public int PageSeek(Page page)
+    {
+        var pageOffset = _position;
+        var availableBytes = _bufferFill - _position;
+
+        if (_headerLength == 0)
+        {
+            if (availableBytes < OggPageHeader.Length)
+            {
+                return 0;
+            }
+
+            var header = ReadHeader(pageOffset);
+            if (!header.HasValidCapturePattern)
+            {
+                ResetPageState();
+                return SkipToNextCapturePattern(pageOffset, availableBytes);
+            }
+
+            _headerLength = header.HeaderSize;
+            if (availableBytes < _headerLength)
+            {
+                return 0;
+            }
+
+            _bodyLength = GetBodySize(pageOffset, header.PageSegments);
+        }
+
+        if (_bodyLength + _headerLength > availableBytes)
+        {
+            return 0;
+        }
+
+        if (!HasValidChecksum(pageOffset))
+        {
+            ResetPageState();
+            return SkipToNextCapturePattern(pageOffset, availableBytes);
+        }
+
+        page?.SetData(Data, pageOffset, _headerLength, Data, pageOffset + _headerLength, _bodyLength);
+
+        _unsynced = false;
+        var pageSize = _headerLength + _bodyLength;
+        _position += pageSize;
+        ResetPageState();
+        return pageSize;
+    }
+
+    public int Reset()
+    {
+        _bufferFill = 0;
+        _position = 0;
+        _unsynced = false;
+        ResetPageState();
+        return 0;
+    }
+
+    public int Wrote(int bytes)
+    {
+        if (_bufferFill + bytes > _bufferSize)
+        {
+            return -1;
+        }
+
+        _bufferFill += bytes;
+        return 0;
+    }
+
+    private OggPageHeader ReadHeader(int pageOffset)
+    {
+        return MemoryMarshal.Read<OggPageHeader>(Data.AsSpan(pageOffset, OggPageHeader.Length));
+    }
+
+    private int GetBodySize(int pageOffset, byte pageSegments)
+    {
+        var size = 0;
+        for (var i = 0; i < pageSegments; i++)
+        {
+            size += Data[pageOffset + OggPageHeader.Length + i] & 0xff;
+        }
+
+        return size;
+    }
+
+    private bool HasValidChecksum(int pageOffset)
+    {
+        Array.Copy(Data, pageOffset + OggPageHeader.ChecksumOffset, checksumBuffer, 0, OggPageHeader.ChecksumLength);
+
+        var checksumPage = new Page();
+        checksumPage.SetData(Data, pageOffset, _headerLength, Data, pageOffset + _headerLength, _bodyLength);
+        checksumPage.WriteChecksum();
+
+        if (ChecksumMatches(pageOffset))
+        {
+            return true;
+        }
+
+        Array.Copy(checksumBuffer, 0, Data, pageOffset + OggPageHeader.ChecksumOffset, OggPageHeader.ChecksumLength);
+        return false;
+    }
+
+    private bool ChecksumMatches(int pageOffset)
+    {
+        var checkLeft = BinaryPrimitives.ReadUInt32LittleEndian(checksumBuffer);
+        var checkRead = Data.AsSpan(pageOffset + OggPageHeader.ChecksumOffset, OggPageHeader.ChecksumLength);
+        var checkRight = BinaryPrimitives.ReadUInt32LittleEndian(checkRead);
+        return checkLeft == checkRight;
+    }
+
+    private int SkipToNextCapturePattern(int pageOffset, int availableBytes)
+    {
+        var next = Array.IndexOf(Data, (byte)'O', pageOffset + 1, Math.Max(0, availableBytes - 1));
+        if (next < 0)
+        {
+            next = _bufferFill;
+        }
+
+        _position = next;
+        return -(next - pageOffset);
+    }
+
+    private void ResetPageState()
+    {
+        _headerLength = 0;
+        _bodyLength = 0;
+    }
 }

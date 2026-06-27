@@ -3,20 +3,20 @@ using TheoraSharp.Theora;
 
 namespace TheoraSharp;
 
-public class TheoraDec : IDecoder
+public class TheoraDec : IVideoDecoder
 {
-    private Info ti = new();
-    private Comment tc = new();
-    private State ts = new();
-    private int packet = 0;
-    private YUVBuffer yuv = new();
+    private Info _info = new();
+    private Comment _comment = new();
+    private State _state = new();
+    private int _packedIdx = 0;
+    private YUVBuffer _yuvBuffer = new();
 
-    private List<uint[]> framesRgb24 = new();
-    public IReadOnlyList<uint[]> FramesRgb24 => framesRgb24;
+    private List<uint[]> _framesRgb24 = new();
+    public IReadOnlyList<uint[]> FramesRgb24 => _framesRgb24;
 
-    public int Width => ti.width;
-    public int Height => ti.height;
-    public float Fps => 1.0f * ti.fps_numerator / ti.fps_denominator;
+    public int Width => _info.width;
+    public int Height => _info.height;
+    public float Fps => 1.0f * _info.fps_numerator / _info.fps_denominator;
 
     public T[] GetData<T>()
     {
@@ -26,43 +26,43 @@ public class TheoraDec : IDecoder
         return FramesRgb24[^1] as T[];
     }
 
-    public bool ReadPacket(Packet op)
+    public bool ReadPacket(PacketContext op)
     {
         uint[] pixels = null;
-        if (packet < 3)
+        if (_packedIdx < 3)
         {
-            if (ti.decodeHeader(tc, op) < 0)
+            if (_info.decodeHeader(_comment, op) < 0)
             {
                 throw new Exception("does not contain Theora video data.");
             }
 
-            if (packet == 2)
+            if (_packedIdx == 2)
             {
-                ts.decodeInit(ti);
+                _state.decodeInit(_info);
             }
         }
         else
         {
-            var tst = ts.decodePacketin(op); 
+            var tst = _state.decodePacketin(op); 
             if (tst != 0)
             {
                 throw new Exception("Error Decoding Theora.");
                 return false;
             }
 
-            if (ts.decodeYUVout(yuv) != 0)
+            if (_state.decodeYUVout(_yuvBuffer) != 0)
             {
                 throw new Exception("Error getting the picture.");
                 return false;
             }
             else
             {
-                pixels = yuv.GetPixelsRgb24();
-                framesRgb24.Add(pixels);
+                pixels = _yuvBuffer.GetPixelsRgb24();
+                _framesRgb24.Add(pixels);
             }
         }
 
-        packet++;
+        _packedIdx++;
         return pixels != null;
     }
 }

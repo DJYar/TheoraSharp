@@ -30,12 +30,12 @@ public class State
     return(0);
   }
 
-  public bool isKeyframe (Packet op)
+  public bool isKeyframe (PacketContext op)
   {
     return (op.PacketBase[op.PacketPos] & 0x40) == 0;
   }
 
-  public int decodePacketin (Packet op)
+  public int decodePacketin (PacketContext op)
   {
     long ret;
 
