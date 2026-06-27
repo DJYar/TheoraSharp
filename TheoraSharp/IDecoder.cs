@@ -14,3 +14,13 @@ public interface IVideoDecoder : IDecoder
     int Height { get; }
     float Fps { get; }
 }
+
+public interface IAudioDecoder : IDecoder
+{
+    int Channels { get; }
+    int SampleRate { get; }
+    long TotalSamples { get; }
+    
+    IReadOnlyList<DecodedAudioChunk> AudioChunks { get; }
+    IReadOnlyList<DecodedAudioChunk> LastAudioChunks { get; }
+}
