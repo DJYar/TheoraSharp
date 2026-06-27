@@ -17,7 +17,7 @@ public class Block
     internal int EofFlag { get; set; }
     internal long GranulePos { get; set; }
     internal long Sequence { get; set; }
-    internal DspState Vd { get; private set; }
+    internal DspState Dsp { get; private set; }
 
     internal long GlueBits { get; set; }
     internal long TimeBits { get; set; }
@@ -26,7 +26,7 @@ public class Block
 
     public Block(DspState dspState)
     {
-        Vd = dspState;
+        Dsp = dspState;
         if (dspState.AnalysisP != 0)
         {
             Opb.WriteInit();
@@ -35,22 +35,20 @@ public class Block
 
     public void Initialize(DspState dspState)
     {
-        Vd = dspState;
+        Dsp = dspState;
     }
 
-    public int Clear()
+    public void Clear()
     {
-        if (Vd != null && Vd.AnalysisP != 0)
+        if (Dsp != null && Dsp.AnalysisP != 0)
         {
             Opb.WriteClear();
         }
-
-        return 0;
     }
 
     public int Synthesis(PacketContext packet)
     {
-        var info = Vd.Vi;
+        var info = Dsp.Vi;
 
         Opb.ReadInit(packet.PacketBase, packet.PacketPos, packet.Bytes);
 
@@ -59,7 +57,7 @@ public class Block
             return -1;
         }
 
-        var mode = Opb.Read(Vd.ModeBits);
+        var mode = Opb.Read(Dsp.ModeBits);
         if (mode == -1)
         {
             return -1;
@@ -105,6 +103,6 @@ public class Block
         }
 
         var type = info.MapType[info.ModeParam[Mode].Mapping];
-        return FuncMapping.MappingP[type].Inverse(this, Vd.Mode[Mode]);
+        return FuncMapping.MappingP[type].Inverse(this, Dsp.Mode[Mode]);
     }
 }

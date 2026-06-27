@@ -238,7 +238,7 @@ internal class Floor1 : FuncFloor
     {
         var look = (LookFloor1)lookObject;
         var info = look.Info;
-        var books = block.Vd.FullBooks;
+        var books = block.Dsp.FullBooks;
 
         if (block.Opb.Read(1) != 1)
         {
@@ -348,7 +348,7 @@ internal class Floor1 : FuncFloor
     {
         var look = (LookFloor1)lookObject;
         var info = look.Info;
-        var n = block.Vd.Vi.BlockSizes[block.Mode] / 2;
+        var n = block.Dsp.Vi.BlockSizes[block.Mode] / 2;
 
         if (memo != null)
         {

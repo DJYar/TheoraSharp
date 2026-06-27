@@ -66,12 +66,7 @@ public class Comment
         Add(tag + "=" + (contents ?? string.Empty));
     }
 
-    public string Query(string tag)
-    {
-        return Query(tag, 0);
-    }
-
-    public string Query(string tag, int count)
+    public string Query(string tag, int count = 0)
     {
         var index = Query(Encoding.UTF8.GetBytes(tag), count);
         if (index == -1)
@@ -162,7 +157,7 @@ public class Comment
 
     internal int Pack(OggBuffer buffer)
     {
-        var vendor = Encoding.UTF8.GetBytes("Xiphophorus libVorbis I 20000508");
+        var vendor = "Xiphophorus libVorbis I 20000508"u8.ToArray();
 
         buffer.Write(0x03, 8);
         buffer.Write(Vorbis);

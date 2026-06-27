@@ -2,11 +2,11 @@ namespace TheoraSharp.Vorbis;
 
 internal class Drft
 {
-    private static readonly int[] Ntryh = { 4, 2, 3, 5 };
-    private const float Tpi = 6.28318530717958647692528676655900577f;
-    private const float Hsqt2 = .70710678118654752440084436210485f;
-    private const float Taui = .86602540378443864676372317075293618f;
-    private const float Taur = -.5f;
+    private static readonly int[] FactorTrialValues = { 4, 2, 3, 5 };
+    private const float TwoPi = 6.28318530717958647692528676655900577f;
+    private const float HalfSqrt2 = .70710678118654752440084436210485f;
+    private const float Sqrt3Over2 = .86602540378443864676372317075293618f;
+    private const float MinusHalf = -.5f;
     private const float Sqrt2 = 1.4142135623730950488016887242097f;
 
     private int _n;
@@ -20,15 +20,15 @@ internal class Drft
             return;
         }
 
-        Drftb1(_n, data, _trigCache, _trigCache, _n, _splitCache);
+        BackwardTransformInternal(_n, data, _trigCache, _trigCache, _n, _splitCache);
     }
 
-    public void Initialize(int n)
+    public void Initialize(int size)
     {
-        _n = n;
-        _trigCache = new float[3 * n];
+        _n = size;
+        _trigCache = new float[3 * size];
         _splitCache = new int[32];
-        Fdrffti(n, _trigCache, _splitCache);
+        InitializeWorkspace(size, _trigCache, _splitCache);
     }
 
     public void Clear()
@@ -37,110 +37,102 @@ internal class Drft
         _splitCache = null;
     }
 
-    private static void Drfti1(int n, float[] wa, int index, int[] ifac)
+    private static void InitializeFactorCache(int size, float[] twiddleFactors, int twiddleBaseOffset, int[] factorCache)
     {
-        float arg, argh, argld, fi;
-        int ntry = 0, i, j = -1;
-        int k1, l1, l2, ib;
-        int ld, ii, ip, @is, nq, nr;
-        int ido, ipm, nfm1;
-        var nl = n;
-        var nf = 0;
+        var trialFactor = 0;
+        var radixIndex = -1;
+        var remainingSize = size;
+        var factorCount = 0;
         var state = 101;
 
         while (true)
         {
+            int innerIndex;
             switch (state)
             {
                 case 101:
-                    j++;
-                    if (j < 4)
+                    radixIndex++;
+                    if (radixIndex < 4)
                     {
-                        ntry = Ntryh[j];
+                        trialFactor = FactorTrialValues[radixIndex];
                     }
                     else
                     {
-                        ntry += 2;
+                        trialFactor += 2;
                     }
 
                     goto case 104;
                 case 104:
-                    nq = nl / ntry;
-                    nr = nl - ntry * nq;
-                    if (nr != 0)
+                    var quotient = remainingSize / trialFactor;
+                    var remainder = remainingSize - trialFactor * quotient;
+                    if (remainder != 0)
                     {
                         state = 101;
                         break;
                     }
 
-                    nf++;
-                    ifac[nf + 1] = ntry;
-                    nl = nq;
-                    if (ntry != 2)
+                    factorCount++;
+                    factorCache[factorCount + 1] = trialFactor;
+                    remainingSize = quotient;
+                    if (trialFactor != 2 || factorCount == 1)
                     {
                         state = 107;
                         break;
                     }
 
-                    if (nf == 1)
+                    for (innerIndex = 1; innerIndex < factorCount; innerIndex++)
                     {
-                        state = 107;
-                        break;
+                        var factorMoveIndex = factorCount - innerIndex + 1;
+                        factorCache[factorMoveIndex + 1] = factorCache[factorMoveIndex];
                     }
 
-                    for (i = 1; i < nf; i++)
-                    {
-                        ib = nf - i + 1;
-                        ifac[ib + 1] = ifac[ib];
-                    }
-
-                    ifac[2] = 2;
+                    factorCache[2] = 2;
                     goto case 107;
                 case 107:
-                    if (nl != 1)
+                    if (remainingSize != 1)
                     {
                         state = 104;
                         break;
                     }
 
-                    ifac[0] = n;
-                    ifac[1] = nf;
-                    argh = Tpi / n;
-                    @is = 0;
-                    nfm1 = nf - 1;
-                    l1 = 1;
+                    factorCache[0] = size;
+                    factorCache[1] = factorCount;
+                    var angleStep = TwoPi / size;
+                    var twiddleWriteOffset = 0;
+                    var factorCountMinusOne = factorCount - 1;
+                    var groupCount = 1;
 
-                    if (nfm1 == 0)
+                    if (factorCountMinusOne == 0)
                     {
                         return;
                     }
 
-                    for (k1 = 0; k1 < nfm1; k1++)
+                    for (var factorStageIndex = 0; factorStageIndex < factorCountMinusOne; factorStageIndex++)
                     {
-                        ip = ifac[k1 + 2];
-                        ld = 0;
-                        l2 = l1 * ip;
-                        ido = n / l2;
-                        ipm = ip - 1;
+                        var radix = factorCache[factorStageIndex + 2];
+                        var factorOffset = 0;
+                        var nextGroupCount = groupCount * radix;
+                        var innerDimension = size / nextGroupCount;
+                        var radixMinusOne = radix - 1;
 
-                        for (j = 0; j < ipm; j++)
+                        for (radixIndex = 0; radixIndex < radixMinusOne; radixIndex++)
                         {
-                            ld += l1;
-                            i = @is;
-                            argld = ld * argh;
-                            fi = 0f;
-                            for (ii = 2; ii < ido; ii += 2)
+                            factorOffset += groupCount;
+                            innerIndex = twiddleWriteOffset;
+                            var factorAngleStep = factorOffset * angleStep;
+                            var angleMultiplier = 0f;
+                            for (var innerPairIndex = 2; innerPairIndex < innerDimension; innerPairIndex += 2)
                             {
-                                fi += 1f;
-                                arg = fi * argld;
-                                wa[index + i++] = (float)Math.Cos(arg);
-                                wa[index + i++] = (float)Math.Sin(arg);
+                                angleMultiplier += 1f;
+                                var angle = angleMultiplier * factorAngleStep;
+                                twiddleFactors[twiddleBaseOffset + innerIndex++] = (float)Math.Cos(angle);
+                                twiddleFactors[twiddleBaseOffset + innerIndex++] = (float)Math.Sin(angle);
                             }
 
-                            @is += ido;
+                            twiddleWriteOffset += innerDimension;
                         }
 
-                        l1 = l2;
+                        groupCount = nextGroupCount;
                     }
 
                     return;
@@ -148,587 +140,577 @@ internal class Drft
         }
     }
 
-    private static void Fdrffti(int n, float[] wsave, int[] ifac)
+    private static void InitializeWorkspace(int size, float[] workspace, int[] factorCache)
     {
-        if (n == 1)
+        if (size == 1)
         {
             return;
         }
 
-        Drfti1(n, wsave, n, ifac);
+        InitializeFactorCache(size, workspace, size, factorCache);
     }
 
-    private static void Dradf2(int ido, int l1, float[] cc, float[] ch, float[] wa1, int index)
+    private static void ForwardRadix2(int innerDimension, int groupCount, float[] input, float[] output, float[] twiddle1, int twiddleOffset)
     {
-        int i, k;
-        float ti2, tr2;
-        int t0, t1, t2, t3, t4, t5, t6;
+        int groupIndex;
+        int offset2;
 
-        t1 = 0;
-        t0 = t2 = l1 * ido;
-        t3 = ido << 1;
-        for (k = 0; k < l1; k++)
+        var offset1 = 0;
+        var groupBlockSize = offset2 = groupCount * innerDimension;
+        var offset3 = innerDimension << 1;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            ch[t1 << 1] = cc[t1] + cc[t2];
-            ch[(t1 << 1) + t3 - 1] = cc[t1] - cc[t2];
-            t1 += ido;
-            t2 += ido;
+            output[offset1 << 1] = input[offset1] + input[offset2];
+            output[(offset1 << 1) + offset3 - 1] = input[offset1] - input[offset2];
+            offset1 += innerDimension;
+            offset2 += innerDimension;
         }
 
-        if (ido < 2)
+        if (innerDimension < 2)
         {
             return;
         }
 
-        if (ido != 2)
+        if (innerDimension != 2)
         {
-            t1 = 0;
-            t2 = t0;
-            for (k = 0; k < l1; k++)
+            offset1 = 0;
+            offset2 = groupBlockSize;
+            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
             {
-                t3 = t2;
-                t4 = (t1 << 1) + (ido << 1);
-                t5 = t1;
-                t6 = t1 + t1;
-                for (i = 2; i < ido; i += 2)
+                offset3 = offset2;
+                var offset4 = (offset1 << 1) + (innerDimension << 1);
+                var offset5 = offset1;
+                var offset6 = offset1 + offset1;
+                for (var innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                 {
-                    t3 += 2;
-                    t4 -= 2;
-                    t5 += 2;
-                    t6 += 2;
-                    tr2 = wa1[index + i - 2] * cc[t3 - 1] + wa1[index + i - 1] * cc[t3];
-                    ti2 = wa1[index + i - 2] * cc[t3] - wa1[index + i - 1] * cc[t3 - 1];
-                    ch[t6] = cc[t5] + ti2;
-                    ch[t4] = ti2 - cc[t5];
-                    ch[t6 - 1] = cc[t5 - 1] + tr2;
-                    ch[t4 - 1] = cc[t5 - 1] - tr2;
+                    offset3 += 2;
+                    offset4 -= 2;
+                    offset5 += 2;
+                    offset6 += 2;
+                    var real2 = twiddle1[twiddleOffset + innerIndex - 2] * input[offset3 - 1] + twiddle1[twiddleOffset + innerIndex - 1] * input[offset3];
+                    var imag2 = twiddle1[twiddleOffset + innerIndex - 2] * input[offset3] - twiddle1[twiddleOffset + innerIndex - 1] * input[offset3 - 1];
+                    output[offset6] = input[offset5] + imag2;
+                    output[offset4] = imag2 - input[offset5];
+                    output[offset6 - 1] = input[offset5 - 1] + real2;
+                    output[offset4 - 1] = input[offset5 - 1] - real2;
                 }
 
-                t1 += ido;
-                t2 += ido;
+                offset1 += innerDimension;
+                offset2 += innerDimension;
             }
 
-            if (ido % 2 == 1)
+            if (innerDimension % 2 == 1)
             {
                 return;
             }
         }
 
-        t3 = t2 = (t1 = ido) - 1;
-        t2 += t0;
-        for (k = 0; k < l1; k++)
+        offset3 = offset2 = (offset1 = innerDimension) - 1;
+        offset2 += groupBlockSize;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            ch[t1] = -cc[t2];
-            ch[t1 - 1] = cc[t3];
-            t1 += ido << 1;
-            t2 += ido;
-            t3 += ido;
+            output[offset1] = -input[offset2];
+            output[offset1 - 1] = input[offset3];
+            offset1 += innerDimension << 1;
+            offset2 += innerDimension;
+            offset3 += innerDimension;
         }
     }
 
-    private static void Dradf4(
-        int ido,
-        int l1,
-        float[] cc,
-        float[] ch,
-        float[] wa1,
-        int index1,
-        float[] wa2,
-        int index2,
-        float[] wa3,
-        int index3)
+    private static void ForwardRadix4(int innerDimension, int groupCount, float[] input, float[] output, float[] twiddle1, 
+        int twiddleOffset1, float[] twiddle2, int twiddleOffset2, float[] twiddle3, int twiddleOffset3)
     {
-        int i, k, t0, t1, t2, t3, t4, t5, t6;
-        float ci2, ci3, ci4, cr2, cr3, cr4, ti1, ti2, ti3, ti4, tr1, tr2, tr3, tr4;
-        t0 = l1 * ido;
+        int groupIndex, offset5, offset6;
+        float imag1, real1, real2;
+        var groupBlockSize = groupCount * innerDimension;
 
-        t1 = t0;
-        t4 = t1 << 1;
-        t2 = t1 + (t1 << 1);
-        t3 = 0;
+        var offset1 = groupBlockSize;
+        var offset4 = offset1 << 1;
+        var offset2 = offset1 + (offset1 << 1);
+        var offset3 = 0;
 
-        for (k = 0; k < l1; k++)
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            tr1 = cc[t1] + cc[t2];
-            tr2 = cc[t3] + cc[t4];
+            real1 = input[offset1] + input[offset2];
+            real2 = input[offset3] + input[offset4];
 
-            ch[t5 = t3 << 2] = tr1 + tr2;
-            ch[(ido << 2) + t5 - 1] = tr2 - tr1;
-            ch[(t5 += ido << 1) - 1] = cc[t3] - cc[t4];
-            ch[t5] = cc[t2] - cc[t1];
+            output[offset5 = offset3 << 2] = real1 + real2;
+            output[(innerDimension << 2) + offset5 - 1] = real2 - real1;
+            output[(offset5 += innerDimension << 1) - 1] = input[offset3] - input[offset4];
+            output[offset5] = input[offset2] - input[offset1];
 
-            t1 += ido;
-            t2 += ido;
-            t3 += ido;
-            t4 += ido;
+            offset1 += innerDimension;
+            offset2 += innerDimension;
+            offset3 += innerDimension;
+            offset4 += innerDimension;
         }
 
-        if (ido < 2)
+        if (innerDimension < 2)
         {
             return;
         }
 
-        if (ido != 2)
+        if (innerDimension != 2)
         {
-            t1 = 0;
-            for (k = 0; k < l1; k++)
+            offset1 = 0;
+            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
             {
-                t2 = t1;
-                t4 = t1 << 2;
-                t5 = (t6 = ido << 1) + t4;
-                for (i = 2; i < ido; i += 2)
+                offset2 = offset1;
+                offset4 = offset1 << 2;
+                offset5 = (offset6 = innerDimension << 1) + offset4;
+                for (var innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                 {
-                    t3 = t2 += 2;
-                    t4 += 2;
-                    t5 -= 2;
+                    offset3 = offset2 += 2;
+                    offset4 += 2;
+                    offset5 -= 2;
 
-                    t3 += t0;
-                    cr2 = wa1[index1 + i - 2] * cc[t3 - 1] + wa1[index1 + i - 1] * cc[t3];
-                    ci2 = wa1[index1 + i - 2] * cc[t3] - wa1[index1 + i - 1] * cc[t3 - 1];
-                    t3 += t0;
-                    cr3 = wa2[index2 + i - 2] * cc[t3 - 1] + wa2[index2 + i - 1] * cc[t3];
-                    ci3 = wa2[index2 + i - 2] * cc[t3] - wa2[index2 + i - 1] * cc[t3 - 1];
-                    t3 += t0;
-                    cr4 = wa3[index3 + i - 2] * cc[t3 - 1] + wa3[index3 + i - 1] * cc[t3];
-                    ci4 = wa3[index3 + i - 2] * cc[t3] - wa3[index3 + i - 1] * cc[t3 - 1];
+                    offset3 += groupBlockSize;
+                    var rotatedReal2 = twiddle1[twiddleOffset1 + innerIndex - 2] * input[offset3 - 1] + twiddle1[twiddleOffset1 + innerIndex - 1] * input[offset3];
+                    var rotatedImag2 = twiddle1[twiddleOffset1 + innerIndex - 2] * input[offset3] - twiddle1[twiddleOffset1 + innerIndex - 1] * input[offset3 - 1];
+                    offset3 += groupBlockSize;
+                    var rotatedReal3 = twiddle2[twiddleOffset2 + innerIndex - 2] * input[offset3 - 1] + twiddle2[twiddleOffset2 + innerIndex - 1] * input[offset3];
+                    var rotatedImag3 = twiddle2[twiddleOffset2 + innerIndex - 2] * input[offset3] - twiddle2[twiddleOffset2 + innerIndex - 1] * input[offset3 - 1];
+                    offset3 += groupBlockSize;
+                    var rotatedReal4 = twiddle3[twiddleOffset3 + innerIndex - 2] * input[offset3 - 1] + twiddle3[twiddleOffset3 + innerIndex - 1] * input[offset3];
+                    var rotatedImag4 = twiddle3[twiddleOffset3 + innerIndex - 2] * input[offset3] - twiddle3[twiddleOffset3 + innerIndex - 1] * input[offset3 - 1];
 
-                    tr1 = cr2 + cr4;
-                    tr4 = cr4 - cr2;
-                    ti1 = ci2 + ci4;
-                    ti4 = ci2 - ci4;
+                    real1 = rotatedReal2 + rotatedReal4;
+                    var real4 = rotatedReal4 - rotatedReal2;
+                    imag1 = rotatedImag2 + rotatedImag4;
+                    var imag4 = rotatedImag2 - rotatedImag4;
 
-                    ti2 = cc[t2] + ci3;
-                    ti3 = cc[t2] - ci3;
-                    tr2 = cc[t2 - 1] + cr3;
-                    tr3 = cc[t2 - 1] - cr3;
+                    var imag2 = input[offset2] + rotatedImag3;
+                    var imag3 = input[offset2] - rotatedImag3;
+                    real2 = input[offset2 - 1] + rotatedReal3;
+                    var real3 = input[offset2 - 1] - rotatedReal3;
 
-                    ch[t4 - 1] = tr1 + tr2;
-                    ch[t4] = ti1 + ti2;
+                    output[offset4 - 1] = real1 + real2;
+                    output[offset4] = imag1 + imag2;
 
-                    ch[t5 - 1] = tr3 - ti4;
-                    ch[t5] = tr4 - ti3;
+                    output[offset5 - 1] = real3 - imag4;
+                    output[offset5] = real4 - imag3;
 
-                    ch[t4 + t6 - 1] = ti4 + tr3;
-                    ch[t4 + t6] = tr4 + ti3;
+                    output[offset4 + offset6 - 1] = imag4 + real3;
+                    output[offset4 + offset6] = real4 + imag3;
 
-                    ch[t5 + t6 - 1] = tr2 - tr1;
-                    ch[t5 + t6] = ti1 - ti2;
+                    output[offset5 + offset6 - 1] = real2 - real1;
+                    output[offset5 + offset6] = imag1 - imag2;
                 }
 
-                t1 += ido;
+                offset1 += innerDimension;
             }
 
-            if ((ido & 1) != 0)
+            if ((innerDimension & 1) != 0)
             {
                 return;
             }
         }
 
-        t2 = (t1 = t0 + ido - 1) + (t0 << 1);
-        t3 = ido << 2;
-        t4 = ido;
-        t5 = ido << 1;
-        t6 = ido;
+        offset2 = (offset1 = groupBlockSize + innerDimension - 1) + (groupBlockSize << 1);
+        offset3 = innerDimension << 2;
+        offset4 = innerDimension;
+        offset5 = innerDimension << 1;
+        offset6 = innerDimension;
 
-        for (k = 0; k < l1; k++)
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            ti1 = -Hsqt2 * (cc[t1] + cc[t2]);
-            tr1 = Hsqt2 * (cc[t1] - cc[t2]);
+            imag1 = -HalfSqrt2 * (input[offset1] + input[offset2]);
+            real1 = HalfSqrt2 * (input[offset1] - input[offset2]);
 
-            ch[t4 - 1] = tr1 + cc[t6 - 1];
-            ch[t4 + t5 - 1] = cc[t6 - 1] - tr1;
+            output[offset4 - 1] = real1 + input[offset6 - 1];
+            output[offset4 + offset5 - 1] = input[offset6 - 1] - real1;
 
-            ch[t4] = ti1 - cc[t1 + t0];
-            ch[t4 + t5] = ti1 + cc[t1 + t0];
+            output[offset4] = imag1 - input[offset1 + groupBlockSize];
+            output[offset4 + offset5] = imag1 + input[offset1 + groupBlockSize];
 
-            t1 += ido;
-            t2 += ido;
-            t4 += t3;
-            t6 += ido;
+            offset1 += innerDimension;
+            offset2 += innerDimension;
+            offset4 += offset3;
+            offset6 += innerDimension;
         }
     }
 
-    private static void Dradfg(
-        int ido,
-        int ip,
-        int l1,
-        int idl1,
-        float[] cc,
-        float[] c1,
-        float[] c2,
-        float[] ch,
-        float[] ch2,
-        float[] wa,
-        int index)
+    private static void ForwardGeneralRadix(int innerDimension, int radix, int groupCount, int groupStride, float[] input, 
+        float[] inputByGroup, float[] inputByStride, float[] output, float[] outputByStride, float[] twiddleFactors, int twiddleOffset)
     {
-        int idij, ipph, i, j, k, l, ic, ik, @is;
-        int t0, t1, t2 = 0, t3, t4, t5, t6, t7, t8, t9, t10;
-        float dc2, ai1, ai2, ar1, ar2, ds2;
-        int nbd;
-        float dcp = 0, arg, dsp = 0, ar1h, ar2h;
-        int idp2, ipp2;
-
-        arg = Tpi / ip;
-        dcp = (float)Math.Cos(arg);
-        dsp = (float)Math.Sin(arg);
-        ipph = (ip + 1) >> 1;
-        ipp2 = ip;
-        idp2 = ido;
-        nbd = (ido - 1) >> 1;
-        t0 = l1 * ido;
-        t10 = ip * ido;
+        int offset1;
+        var offset2 = 0;
+        int offset3;
+        int offset4;
+        int offset5;
+        int offset6;
+        int offset7;
+        int offset8;
+        int offset9;
+        float cosineStep, imagAccumulator1, imagAccumulator2, realAccumulator1, realAccumulator2, sineStep;
+        float nextRealAccumulator1, nextRealAccumulator2;
+        int innerIndex;
+        int radixIndex;
+        int groupIndex;
+        int strideIndex;
+        var angle = TwoPi / radix;
+        var radixCosineStep = (float)Math.Cos(angle);
+        var radixSineStep = (float)Math.Sin(angle);
+        var halfRadixCount = (radix + 1) >> 1;
+        var radixOffsetLimit = radix;
+        var innerOffsetLimit = innerDimension;
+        var halfInnerDimension = (innerDimension - 1) >> 1;
+        var groupBlockSize = groupCount * innerDimension;
+        var radixBlockSize = radix * innerDimension;
         var state = 101;
-
+        
         while (true)
         {
             switch (state)
             {
                 case 101:
-                    if (ido == 1)
+                    if (innerDimension == 1)
                     {
                         state = 119;
                         break;
                     }
 
-                    for (ik = 0; ik < idl1; ik++)
+                    for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                     {
-                        ch2[ik] = c2[ik];
+                        outputByStride[strideIndex] = inputByStride[strideIndex];
                     }
 
-                    t1 = 0;
-                    for (j = 1; j < ip; j++)
+                    offset1 = 0;
+                    for (radixIndex = 1; radixIndex < radix; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 = t1;
-                        for (k = 0; k < l1; k++)
+                        offset1 += groupBlockSize;
+                        offset2 = offset1;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            ch[t2] = c1[t2];
-                            t2 += ido;
+                            output[offset2] = inputByGroup[offset2];
+                            offset2 += innerDimension;
                         }
                     }
 
-                    @is = -ido;
-                    t1 = 0;
-                    if (nbd > l1)
+                    var twiddleBaseOffset = -innerDimension;
+                    offset1 = 0;
+                    int twiddleIndex;
+                    if (halfInnerDimension > groupCount)
                     {
-                        for (j = 1; j < ip; j++)
+                        for (radixIndex = 1; radixIndex < radix; radixIndex++)
                         {
-                            t1 += t0;
-                            @is += ido;
-                            t2 = -ido + t1;
-                            for (k = 0; k < l1; k++)
+                            offset1 += groupBlockSize;
+                            twiddleBaseOffset += innerDimension;
+                            offset2 = -innerDimension + offset1;
+                            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                             {
-                                idij = @is - 1;
-                                t2 += ido;
-                                t3 = t2;
-                                for (i = 2; i < ido; i += 2)
+                                twiddleIndex = twiddleBaseOffset - 1;
+                                offset2 += innerDimension;
+                                offset3 = offset2;
+                                for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                                 {
-                                    idij += 2;
-                                    t3 += 2;
-                                    ch[t3 - 1] = wa[index + idij - 1] * c1[t3 - 1] + wa[index + idij] * c1[t3];
-                                    ch[t3] = wa[index + idij - 1] * c1[t3] - wa[index + idij] * c1[t3 - 1];
+                                    twiddleIndex += 2;
+                                    offset3 += 2;
+                                    output[offset3 - 1] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * inputByGroup[offset3 - 1] + twiddleFactors[twiddleOffset + twiddleIndex] * inputByGroup[offset3];
+                                    output[offset3] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * inputByGroup[offset3] - twiddleFactors[twiddleOffset + twiddleIndex] * inputByGroup[offset3 - 1];
                                 }
                             }
                         }
                     }
                     else
                     {
-                        for (j = 1; j < ip; j++)
+                        for (radixIndex = 1; radixIndex < radix; radixIndex++)
                         {
-                            @is += ido;
-                            idij = @is - 1;
-                            t1 += t0;
-                            t2 = t1;
-                            for (i = 2; i < ido; i += 2)
+                            twiddleBaseOffset += innerDimension;
+                            twiddleIndex = twiddleBaseOffset - 1;
+                            offset1 += groupBlockSize;
+                            offset2 = offset1;
+                            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                             {
-                                idij += 2;
-                                t2 += 2;
-                                t3 = t2;
-                                for (k = 0; k < l1; k++)
+                                twiddleIndex += 2;
+                                offset2 += 2;
+                                offset3 = offset2;
+                                for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                                 {
-                                    ch[t3 - 1] = wa[index + idij - 1] * c1[t3 - 1] + wa[index + idij] * c1[t3];
-                                    ch[t3] = wa[index + idij - 1] * c1[t3] - wa[index + idij] * c1[t3 - 1];
-                                    t3 += ido;
+                                    output[offset3 - 1] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * inputByGroup[offset3 - 1] + twiddleFactors[twiddleOffset + twiddleIndex] * inputByGroup[offset3];
+                                    output[offset3] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * inputByGroup[offset3] - twiddleFactors[twiddleOffset + twiddleIndex] * inputByGroup[offset3 - 1];
+                                    offset3 += innerDimension;
                                 }
                             }
                         }
                     }
 
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    if (nbd < l1)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    if (halfInnerDimension < groupCount)
                     {
-                        for (j = 1; j < ipph; j++)
+                        for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                         {
-                            t1 += t0;
-                            t2 -= t0;
-                            t3 = t1;
-                            t4 = t2;
-                            for (i = 2; i < ido; i += 2)
+                            offset1 += groupBlockSize;
+                            offset2 -= groupBlockSize;
+                            offset3 = offset1;
+                            offset4 = offset2;
+                            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                             {
-                                t3 += 2;
-                                t4 += 2;
-                                t5 = t3 - ido;
-                                t6 = t4 - ido;
-                                for (k = 0; k < l1; k++)
+                                offset3 += 2;
+                                offset4 += 2;
+                                offset5 = offset3 - innerDimension;
+                                offset6 = offset4 - innerDimension;
+                                for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                                 {
-                                    t5 += ido;
-                                    t6 += ido;
-                                    c1[t5 - 1] = ch[t5 - 1] + ch[t6 - 1];
-                                    c1[t6 - 1] = ch[t5] - ch[t6];
-                                    c1[t5] = ch[t5] + ch[t6];
-                                    c1[t6] = ch[t6 - 1] - ch[t5 - 1];
+                                    offset5 += innerDimension;
+                                    offset6 += innerDimension;
+                                    inputByGroup[offset5 - 1] = output[offset5 - 1] + output[offset6 - 1];
+                                    inputByGroup[offset6 - 1] = output[offset5] - output[offset6];
+                                    inputByGroup[offset5] = output[offset5] + output[offset6];
+                                    inputByGroup[offset6] = output[offset6 - 1] - output[offset5 - 1];
                                 }
                             }
                         }
                     }
                     else
                     {
-                        for (j = 1; j < ipph; j++)
+                        for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                         {
-                            t1 += t0;
-                            t2 -= t0;
-                            t3 = t1;
-                            t4 = t2;
-                            for (k = 0; k < l1; k++)
+                            offset1 += groupBlockSize;
+                            offset2 -= groupBlockSize;
+                            offset3 = offset1;
+                            offset4 = offset2;
+                            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                             {
-                                t5 = t3;
-                                t6 = t4;
-                                for (i = 2; i < ido; i += 2)
+                                offset5 = offset3;
+                                offset6 = offset4;
+                                for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                                 {
-                                    t5 += 2;
-                                    t6 += 2;
-                                    c1[t5 - 1] = ch[t5 - 1] + ch[t6 - 1];
-                                    c1[t6 - 1] = ch[t5] - ch[t6];
-                                    c1[t5] = ch[t5] + ch[t6];
-                                    c1[t6] = ch[t6 - 1] - ch[t5 - 1];
+                                    offset5 += 2;
+                                    offset6 += 2;
+                                    inputByGroup[offset5 - 1] = output[offset5 - 1] + output[offset6 - 1];
+                                    inputByGroup[offset6 - 1] = output[offset5] - output[offset6];
+                                    inputByGroup[offset5] = output[offset5] + output[offset6];
+                                    inputByGroup[offset6] = output[offset6 - 1] - output[offset5 - 1];
                                 }
 
-                                t3 += ido;
-                                t4 += ido;
+                                offset3 += innerDimension;
+                                offset4 += innerDimension;
                             }
                         }
                     }
 
                     goto case 119;
                 case 119:
-                    for (ik = 0; ik < idl1; ik++)
+                    for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                     {
-                        c2[ik] = ch2[ik];
+                        inputByStride[strideIndex] = outputByStride[strideIndex];
                     }
 
-                    t1 = 0;
-                    t2 = ipp2 * idl1;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupStride;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1 - ido;
-                        t4 = t2 - ido;
-                        for (k = 0; k < l1; k++)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1 - innerDimension;
+                        offset4 = offset2 - innerDimension;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            t3 += ido;
-                            t4 += ido;
-                            c1[t3] = ch[t3] + ch[t4];
-                            c1[t4] = ch[t4] - ch[t3];
+                            offset3 += innerDimension;
+                            offset4 += innerDimension;
+                            inputByGroup[offset3] = output[offset3] + output[offset4];
+                            inputByGroup[offset4] = output[offset4] - output[offset3];
                         }
                     }
 
-                    ar1 = 1f;
-                    ai1 = 0f;
-                    t1 = 0;
-                    t2 = ipp2 * idl1;
-                    t3 = (ip - 1) * idl1;
-                    for (l = 1; l < ipph; l++)
+                    realAccumulator1 = 1f;
+                    imagAccumulator1 = 0f;
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupStride;
+                    offset3 = (radix - 1) * groupStride;
+                    int harmonicIndex;
+                    for (harmonicIndex = 1; harmonicIndex < halfRadixCount; harmonicIndex++)
                     {
-                        t1 += idl1;
-                        t2 -= idl1;
-                        ar1h = dcp * ar1 - dsp * ai1;
-                        ai1 = dcp * ai1 + dsp * ar1;
-                        ar1 = ar1h;
-                        t4 = t1;
-                        t5 = t2;
-                        t6 = t3;
-                        t7 = idl1;
+                        offset1 += groupStride;
+                        offset2 -= groupStride;
+                        nextRealAccumulator1 = radixCosineStep * realAccumulator1 - radixSineStep * imagAccumulator1;
+                        imagAccumulator1 = radixCosineStep * imagAccumulator1 + radixSineStep * realAccumulator1;
+                        realAccumulator1 = nextRealAccumulator1;
+                        offset4 = offset1;
+                        offset5 = offset2;
+                        offset6 = offset3;
+                        offset7 = groupStride;
 
-                        for (ik = 0; ik < idl1; ik++)
+                        for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                         {
-                            ch2[t4++] = c2[ik] + ar1 * c2[t7++];
-                            ch2[t5++] = ai1 * c2[t6++];
+                            outputByStride[offset4++] = inputByStride[strideIndex] + realAccumulator1 * inputByStride[offset7++];
+                            outputByStride[offset5++] = imagAccumulator1 * inputByStride[offset6++];
                         }
 
-                        dc2 = ar1;
-                        ds2 = ai1;
-                        ar2 = ar1;
-                        ai2 = ai1;
+                        cosineStep = realAccumulator1;
+                        sineStep = imagAccumulator1;
+                        realAccumulator2 = realAccumulator1;
+                        imagAccumulator2 = imagAccumulator1;
 
-                        t4 = idl1;
-                        t5 = (ipp2 - 1) * idl1;
-                        for (j = 2; j < ipph; j++)
+                        offset4 = groupStride;
+                        offset5 = (radixOffsetLimit - 1) * groupStride;
+                        for (radixIndex = 2; radixIndex < halfRadixCount; radixIndex++)
                         {
-                            t4 += idl1;
-                            t5 -= idl1;
+                            offset4 += groupStride;
+                            offset5 -= groupStride;
 
-                            ar2h = dc2 * ar2 - ds2 * ai2;
-                            ai2 = dc2 * ai2 + ds2 * ar2;
-                            ar2 = ar2h;
+                            nextRealAccumulator2 = cosineStep * realAccumulator2 - sineStep * imagAccumulator2;
+                            imagAccumulator2 = cosineStep * imagAccumulator2 + sineStep * realAccumulator2;
+                            realAccumulator2 = nextRealAccumulator2;
 
-                            t6 = t1;
-                            t7 = t2;
-                            t8 = t4;
-                            t9 = t5;
-                            for (ik = 0; ik < idl1; ik++)
+                            offset6 = offset1;
+                            offset7 = offset2;
+                            offset8 = offset4;
+                            offset9 = offset5;
+                            for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                             {
-                                ch2[t6++] += ar2 * c2[t8++];
-                                ch2[t7++] += ai2 * c2[t9++];
+                                outputByStride[offset6++] += realAccumulator2 * inputByStride[offset8++];
+                                outputByStride[offset7++] += imagAccumulator2 * inputByStride[offset9++];
                             }
                         }
                     }
 
-                    t1 = 0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += idl1;
-                        t2 = t1;
-                        for (ik = 0; ik < idl1; ik++)
+                        offset1 += groupStride;
+                        offset2 = offset1;
+                        for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                         {
-                            ch2[ik] += c2[t2++];
+                            outputByStride[strideIndex] += inputByStride[offset2++];
                         }
                     }
 
-                    if (ido < l1)
+                    if (innerDimension < groupCount)
                     {
                         state = 132;
                         break;
                     }
 
-                    t1 = 0;
-                    t2 = 0;
-                    for (k = 0; k < l1; k++)
+                    offset1 = 0;
+                    offset2 = 0;
+                    for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                     {
-                        t3 = t1;
-                        t4 = t2;
-                        for (i = 0; i < ido; i++)
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        for (innerIndex = 0; innerIndex < innerDimension; innerIndex++)
                         {
-                            cc[t4++] = ch[t3++];
+                            input[offset4++] = output[offset3++];
                         }
 
-                        t1 += ido;
-                        t2 += t10;
+                        offset1 += innerDimension;
+                        offset2 += radixBlockSize;
                     }
 
                     state = 135;
                     break;
                 case 132:
-                    for (i = 0; i < ido; i++)
+                    for (innerIndex = 0; innerIndex < innerDimension; innerIndex++)
                     {
-                        t1 = i;
-                        t2 = i;
-                        for (k = 0; k < l1; k++)
+                        offset1 = innerIndex;
+                        offset2 = innerIndex;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            cc[t2] = ch[t1];
-                            t1 += ido;
-                            t2 += t10;
+                            input[offset2] = output[offset1];
+                            offset1 += innerDimension;
+                            offset2 += radixBlockSize;
                         }
                     }
 
                     goto case 135;
                 case 135:
-                    t1 = 0;
-                    t2 = ido << 1;
-                    t3 = 0;
-                    t4 = ipp2 * t0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = innerDimension << 1;
+                    offset3 = 0;
+                    offset4 = radixOffsetLimit * groupBlockSize;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t2;
-                        t3 += t0;
-                        t4 -= t0;
+                        offset1 += offset2;
+                        offset3 += groupBlockSize;
+                        offset4 -= groupBlockSize;
 
-                        t5 = t1;
-                        t6 = t3;
-                        t7 = t4;
+                        offset5 = offset1;
+                        offset6 = offset3;
+                        offset7 = offset4;
 
-                        for (k = 0; k < l1; k++)
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            cc[t5 - 1] = ch[t6];
-                            cc[t5] = ch[t7];
-                            t5 += t10;
-                            t6 += ido;
-                            t7 += ido;
+                            input[offset5 - 1] = output[offset6];
+                            input[offset5] = output[offset7];
+                            offset5 += radixBlockSize;
+                            offset6 += innerDimension;
+                            offset7 += innerDimension;
                         }
                     }
 
-                    if (ido == 1)
+                    if (innerDimension == 1)
                     {
                         return;
                     }
 
-                    if (nbd < l1)
+                    if (halfInnerDimension < groupCount)
                     {
                         state = 141;
                         break;
                     }
 
-                    t1 = -ido;
-                    t3 = 0;
-                    t4 = 0;
-                    t5 = ipp2 * t0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = -innerDimension;
+                    offset3 = 0;
+                    offset4 = 0;
+                    offset5 = radixOffsetLimit * groupBlockSize;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t2;
-                        t3 += t2;
-                        t4 += t0;
-                        t5 -= t0;
-                        t6 = t1;
-                        t7 = t3;
-                        t8 = t4;
-                        t9 = t5;
-                        for (k = 0; k < l1; k++)
+                        offset1 += offset2;
+                        offset3 += offset2;
+                        offset4 += groupBlockSize;
+                        offset5 -= groupBlockSize;
+                        offset6 = offset1;
+                        offset7 = offset3;
+                        offset8 = offset4;
+                        offset9 = offset5;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            for (i = 2; i < ido; i += 2)
+                            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                             {
-                                ic = idp2 - i;
-                                cc[i + t7 - 1] = ch[i + t8 - 1] + ch[i + t9 - 1];
-                                cc[ic + t6 - 1] = ch[i + t8 - 1] - ch[i + t9 - 1];
-                                cc[i + t7] = ch[i + t8] + ch[i + t9];
-                                cc[ic + t6] = ch[i + t9] - ch[i + t8];
+                                var ic = innerOffsetLimit - innerIndex;
+                                input[innerIndex + offset7 - 1] = output[innerIndex + offset8 - 1] + output[innerIndex + offset9 - 1];
+                                input[ic + offset6 - 1] = output[innerIndex + offset8 - 1] - output[innerIndex + offset9 - 1];
+                                input[innerIndex + offset7] = output[innerIndex + offset8] + output[innerIndex + offset9];
+                                input[ic + offset6] = output[innerIndex + offset9] - output[innerIndex + offset8];
                             }
 
-                            t6 += t10;
-                            t7 += t10;
-                            t8 += ido;
-                            t9 += ido;
+                            offset6 += radixBlockSize;
+                            offset7 += radixBlockSize;
+                            offset8 += innerDimension;
+                            offset9 += innerDimension;
                         }
                     }
 
                     return;
                 case 141:
-                    t1 = -ido;
-                    t3 = 0;
-                    t4 = 0;
-                    t5 = ipp2 * t0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = -innerDimension;
+                    offset3 = 0;
+                    offset4 = 0;
+                    offset5 = radixOffsetLimit * groupBlockSize;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t2;
-                        t3 += t2;
-                        t4 += t0;
-                        t5 -= t0;
-                        for (i = 2; i < ido; i += 2)
+                        offset1 += offset2;
+                        offset3 += offset2;
+                        offset4 += groupBlockSize;
+                        offset5 -= groupBlockSize;
+                        for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                         {
-                            t6 = idp2 + t1 - i;
-                            t7 = i + t3;
-                            t8 = i + t4;
-                            t9 = i + t5;
-                            for (k = 0; k < l1; k++)
+                            offset6 = innerOffsetLimit + offset1 - innerIndex;
+                            offset7 = innerIndex + offset3;
+                            offset8 = innerIndex + offset4;
+                            offset9 = innerIndex + offset5;
+                            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                             {
-                                cc[t7 - 1] = ch[t8 - 1] + ch[t9 - 1];
-                                cc[t6 - 1] = ch[t8 - 1] - ch[t9 - 1];
-                                cc[t7] = ch[t8] + ch[t9];
-                                cc[t6] = ch[t9] - ch[t8];
-                                t6 += t10;
-                                t7 += t10;
-                                t8 += ido;
-                                t9 += ido;
+                                input[offset7 - 1] = output[offset8 - 1] + output[offset9 - 1];
+                                input[offset6 - 1] = output[offset8 - 1] - output[offset9 - 1];
+                                input[offset7] = output[offset8] + output[offset9];
+                                input[offset6] = output[offset9] - output[offset8];
+                                offset6 += radixBlockSize;
+                                offset7 += radixBlockSize;
+                                offset8 += innerDimension;
+                                offset9 += innerDimension;
                             }
                         }
                     }
@@ -738,26 +720,26 @@ internal class Drft
         }
     }
 
-    private static void Drftf1(int n, float[] c, float[] ch, float[] wa, int[] ifac)
+    private static void ForwardTransformInternal(int size, float[] data, float[] output, float[] twiddleFactors, int[] factorCache)
     {
-        int i, k1, l1, l2;
-        int na, kh, nf;
-        int ip, iw, ido, idl1, ix2, ix3;
+        int innerIndex, factorStageIndex, groupCount, nextGroupCount;
+        int activeBuffer, reverseFactorIndex, factorCount;
+        int radix, twiddleStart, innerDimension, groupStride, twiddleStart2, twiddleStart3;
 
-        nf = ifac[1];
-        na = 1;
-        l2 = n;
-        iw = n;
+        factorCount = factorCache[1];
+        activeBuffer = 1;
+        nextGroupCount = size;
+        twiddleStart = size;
 
-        for (k1 = 0; k1 < nf; k1++)
+        for (factorStageIndex = 0; factorStageIndex < factorCount; factorStageIndex++)
         {
-            kh = nf - k1;
-            ip = ifac[kh + 1];
-            l1 = l2 / ip;
-            ido = n / l2;
-            idl1 = ido * l1;
-            iw -= (ip - 1) * ido;
-            na = 1 - na;
+            reverseFactorIndex = factorCount - factorStageIndex;
+            radix = factorCache[reverseFactorIndex + 1];
+            groupCount = nextGroupCount / radix;
+            innerDimension = size / nextGroupCount;
+            groupStride = innerDimension * groupCount;
+            twiddleStart -= (radix - 1) * innerDimension;
+            activeBuffer = 1 - activeBuffer;
             var state = 100;
 
             while (true)
@@ -765,355 +747,329 @@ internal class Drft
                 switch (state)
                 {
                     case 100:
-                        if (ip != 4)
+                        if (radix != 4)
                         {
                             state = 102;
                             break;
                         }
 
-                        ix2 = iw + ido;
-                        ix3 = ix2 + ido;
-                        if (na != 0)
+                        twiddleStart2 = twiddleStart + innerDimension;
+                        twiddleStart3 = twiddleStart2 + innerDimension;
+                        if (activeBuffer != 0)
                         {
-                            Dradf4(ido, l1, ch, c, wa, iw - 1, wa, ix2 - 1, wa, ix3 - 1);
+                            ForwardRadix4(innerDimension, groupCount, output, data, twiddleFactors, twiddleStart - 1, twiddleFactors, twiddleStart2 - 1, twiddleFactors, twiddleStart3 - 1);
                         }
                         else
                         {
-                            Dradf4(ido, l1, c, ch, wa, iw - 1, wa, ix2 - 1, wa, ix3 - 1);
+                            ForwardRadix4(innerDimension, groupCount, data, output, twiddleFactors, twiddleStart - 1, twiddleFactors, twiddleStart2 - 1, twiddleFactors, twiddleStart3 - 1);
                         }
 
                         state = 110;
                         break;
                     case 102:
-                        if (ip != 2)
+                        if (radix != 2)
                         {
                             state = 104;
                             break;
                         }
 
-                        if (na != 0)
+                        if (activeBuffer != 0)
                         {
                             state = 103;
                             break;
                         }
 
-                        Dradf2(ido, l1, c, ch, wa, iw - 1);
+                        ForwardRadix2(innerDimension, groupCount, data, output, twiddleFactors, twiddleStart - 1);
                         state = 110;
                         break;
                     case 103:
-                        Dradf2(ido, l1, ch, c, wa, iw - 1);
+                        ForwardRadix2(innerDimension, groupCount, output, data, twiddleFactors, twiddleStart - 1);
                         goto case 104;
                     case 104:
-                        if (ido == 1)
+                        if (innerDimension == 1)
                         {
-                            na = 1 - na;
+                            activeBuffer = 1 - activeBuffer;
                         }
 
-                        if (na != 0)
+                        if (activeBuffer != 0)
                         {
                             state = 109;
                             break;
                         }
 
-                        Dradfg(ido, ip, l1, idl1, c, c, c, ch, ch, wa, iw - 1);
-                        na = 1;
+                        ForwardGeneralRadix(innerDimension, radix, groupCount, groupStride, data, data, data, output, output, twiddleFactors, twiddleStart - 1);
+                        activeBuffer = 1;
                         state = 110;
                         break;
                     case 109:
-                        Dradfg(ido, ip, l1, idl1, ch, ch, ch, c, c, wa, iw - 1);
-                        na = 0;
+                        ForwardGeneralRadix(innerDimension, radix, groupCount, groupStride, output, output, output, data, data, twiddleFactors, twiddleStart - 1);
+                        activeBuffer = 0;
                         goto case 110;
                     case 110:
-                        l2 = l1;
+                        nextGroupCount = groupCount;
                         goto EndLoop;
                 }
             }
 
-        EndLoop:
+            EndLoop:
             ;
         }
 
-        if (na == 1)
+        if (activeBuffer == 1)
         {
             return;
         }
 
-        for (i = 0; i < n; i++)
+        for (innerIndex = 0; innerIndex < size; innerIndex++)
         {
-            c[i] = ch[i];
+            data[innerIndex] = output[innerIndex];
         }
     }
 
-    private static void Dradb2(int ido, int l1, float[] cc, float[] ch, float[] wa1, int index)
+    private static void BackwardRadix2(int innerDimension, int groupCount, float[] input, float[] output, float[] twiddle1, int twiddleOffset)
     {
-        int i, k, t0, t1, t2, t3, t4, t5, t6;
-        float ti2, tr2;
+        int innerIndex, groupIndex, groupBlockSize, offset1, offset2, offset3, offset4, offset5, offset6;
+        float imag2, real2;
 
-        t0 = l1 * ido;
+        groupBlockSize = groupCount * innerDimension;
 
-        t1 = 0;
-        t2 = 0;
-        t3 = (ido << 1) - 1;
-        for (k = 0; k < l1; k++)
+        offset1 = 0;
+        offset2 = 0;
+        offset3 = (innerDimension << 1) - 1;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            ch[t1] = cc[t2] + cc[t3 + t2];
-            ch[t1 + t0] = cc[t2] - cc[t3 + t2];
-            t2 = (t1 += ido) << 1;
+            output[offset1] = input[offset2] + input[offset3 + offset2];
+            output[offset1 + groupBlockSize] = input[offset2] - input[offset3 + offset2];
+            offset2 = (offset1 += innerDimension) << 1;
         }
 
-        if (ido < 2)
+        if (innerDimension < 2)
         {
             return;
         }
 
-        if (ido != 2)
+        if (innerDimension != 2)
         {
-            t1 = 0;
-            t2 = 0;
-            for (k = 0; k < l1; k++)
+            offset1 = 0;
+            offset2 = 0;
+            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
             {
-                t3 = t1;
-                t5 = (t4 = t2) + (ido << 1);
-                t6 = t0 + t1;
-                for (i = 2; i < ido; i += 2)
+                offset3 = offset1;
+                offset5 = (offset4 = offset2) + (innerDimension << 1);
+                offset6 = groupBlockSize + offset1;
+                for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                 {
-                    t3 += 2;
-                    t4 += 2;
-                    t5 -= 2;
-                    t6 += 2;
-                    ch[t3 - 1] = cc[t4 - 1] + cc[t5 - 1];
-                    tr2 = cc[t4 - 1] - cc[t5 - 1];
-                    ch[t3] = cc[t4] - cc[t5];
-                    ti2 = cc[t4] + cc[t5];
-                    ch[t6 - 1] = wa1[index + i - 2] * tr2 - wa1[index + i - 1] * ti2;
-                    ch[t6] = wa1[index + i - 2] * ti2 + wa1[index + i - 1] * tr2;
+                    offset3 += 2;
+                    offset4 += 2;
+                    offset5 -= 2;
+                    offset6 += 2;
+                    output[offset3 - 1] = input[offset4 - 1] + input[offset5 - 1];
+                    real2 = input[offset4 - 1] - input[offset5 - 1];
+                    output[offset3] = input[offset4] - input[offset5];
+                    imag2 = input[offset4] + input[offset5];
+                    output[offset6 - 1] = twiddle1[twiddleOffset + innerIndex - 2] * real2 - twiddle1[twiddleOffset + innerIndex - 1] * imag2;
+                    output[offset6] = twiddle1[twiddleOffset + innerIndex - 2] * imag2 + twiddle1[twiddleOffset + innerIndex - 1] * real2;
                 }
 
-                t2 = (t1 += ido) << 1;
+                offset2 = (offset1 += innerDimension) << 1;
             }
 
-            if ((ido % 2) == 1)
+            if ((innerDimension % 2) == 1)
             {
                 return;
             }
         }
 
-        t1 = ido - 1;
-        t2 = ido - 1;
-        for (k = 0; k < l1; k++)
+        offset1 = innerDimension - 1;
+        offset2 = innerDimension - 1;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            ch[t1] = cc[t2] + cc[t2];
-            ch[t1 + t0] = -(cc[t2 + 1] + cc[t2 + 1]);
-            t1 += ido;
-            t2 += ido << 1;
+            output[offset1] = input[offset2] + input[offset2];
+            output[offset1 + groupBlockSize] = -(input[offset2 + 1] + input[offset2 + 1]);
+            offset1 += innerDimension;
+            offset2 += innerDimension << 1;
         }
     }
 
-    private static void Dradb3(
-        int ido,
-        int l1,
-        float[] cc,
-        float[] ch,
-        float[] wa1,
-        int index1,
-        float[] wa2,
-        int index2)
+    private static void BackwardRadix3(int innerDimension, int groupCount, float[] input, float[] output, float[] twiddle1,
+        int twiddleOffset1, float[] twiddle2, int twiddleOffset2)
     {
-        int i, k, t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10;
-        float ci2, ci3, di2, di3, cr2, cr3, dr2, dr3, ti2, tr2;
-        t0 = l1 * ido;
+        int innerIndex, groupIndex, offset1, offset2, offset3, offset4, offset5, offset6, offset7, offset8, offset9, radixBlockSize;
+        float rotatedImag2, rotatedImag3, combinedImag2, combinedImag3, rotatedReal2, rotatedReal3, combinedReal2, combinedReal3, imag2, real2;
+        var groupBlockSize = groupCount * innerDimension;
 
-        t1 = 0;
-        t2 = t0 << 1;
-        t3 = ido << 1;
-        t4 = ido + (ido << 1);
-        t5 = 0;
-        for (k = 0; k < l1; k++)
+        offset1 = 0;
+        offset2 = groupBlockSize << 1;
+        offset3 = innerDimension << 1;
+        offset4 = innerDimension + (innerDimension << 1);
+        offset5 = 0;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            tr2 = cc[t3 - 1] + cc[t3 - 1];
-            cr2 = cc[t5] + Taur * tr2;
-            ch[t1] = cc[t5] + tr2;
-            ci3 = Taui * (cc[t3] + cc[t3]);
-            ch[t1 + t0] = cr2 - ci3;
-            ch[t1 + t2] = cr2 + ci3;
-            t1 += ido;
-            t3 += t4;
-            t5 += t4;
+            real2 = input[offset3 - 1] + input[offset3 - 1];
+            rotatedReal2 = input[offset5] + MinusHalf * real2;
+            output[offset1] = input[offset5] + real2;
+            rotatedImag3 = Sqrt3Over2 * (input[offset3] + input[offset3]);
+            output[offset1 + groupBlockSize] = rotatedReal2 - rotatedImag3;
+            output[offset1 + offset2] = rotatedReal2 + rotatedImag3;
+            offset1 += innerDimension;
+            offset3 += offset4;
+            offset5 += offset4;
         }
 
-        if (ido == 1)
+        if (innerDimension == 1)
         {
             return;
         }
 
-        t1 = 0;
-        t3 = ido << 1;
-        for (k = 0; k < l1; k++)
+        offset1 = 0;
+        offset3 = innerDimension << 1;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            t7 = t1 + (t1 << 1);
-            t6 = t5 = t7 + t3;
-            t8 = t1;
-            t10 = (t9 = t1 + t0) + t0;
+            offset7 = offset1 + (offset1 << 1);
+            offset6 = offset5 = offset7 + offset3;
+            offset8 = offset1;
+            radixBlockSize = (offset9 = offset1 + groupBlockSize) + groupBlockSize;
 
-            for (i = 2; i < ido; i += 2)
+            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
             {
-                t5 += 2;
-                t6 -= 2;
-                t7 += 2;
-                t8 += 2;
-                t9 += 2;
-                t10 += 2;
-                tr2 = cc[t5 - 1] + cc[t6 - 1];
-                cr2 = cc[t7 - 1] + Taur * tr2;
-                ch[t8 - 1] = cc[t7 - 1] + tr2;
-                ti2 = cc[t5] - cc[t6];
-                ci2 = cc[t7] + Taur * ti2;
-                ch[t8] = cc[t7] + ti2;
-                cr3 = Taui * (cc[t5 - 1] - cc[t6 - 1]);
-                ci3 = Taui * (cc[t5] + cc[t6]);
-                dr2 = cr2 - ci3;
-                dr3 = cr2 + ci3;
-                di2 = ci2 + cr3;
-                di3 = ci2 - cr3;
-                ch[t9 - 1] = wa1[index1 + i - 2] * dr2 - wa1[index1 + i - 1] * di2;
-                ch[t9] = wa1[index1 + i - 2] * di2 + wa1[index1 + i - 1] * dr2;
-                ch[t10 - 1] = wa2[index2 + i - 2] * dr3 - wa2[index2 + i - 1] * di3;
-                ch[t10] = wa2[index2 + i - 2] * di3 + wa2[index2 + i - 1] * dr3;
+                offset5 += 2;
+                offset6 -= 2;
+                offset7 += 2;
+                offset8 += 2;
+                offset9 += 2;
+                radixBlockSize += 2;
+                real2 = input[offset5 - 1] + input[offset6 - 1];
+                rotatedReal2 = input[offset7 - 1] + MinusHalf * real2;
+                output[offset8 - 1] = input[offset7 - 1] + real2;
+                imag2 = input[offset5] - input[offset6];
+                rotatedImag2 = input[offset7] + MinusHalf * imag2;
+                output[offset8] = input[offset7] + imag2;
+                rotatedReal3 = Sqrt3Over2 * (input[offset5 - 1] - input[offset6 - 1]);
+                rotatedImag3 = Sqrt3Over2 * (input[offset5] + input[offset6]);
+                combinedReal2 = rotatedReal2 - rotatedImag3;
+                combinedReal3 = rotatedReal2 + rotatedImag3;
+                combinedImag2 = rotatedImag2 + rotatedReal3;
+                combinedImag3 = rotatedImag2 - rotatedReal3;
+                output[offset9 - 1] = twiddle1[twiddleOffset1 + innerIndex - 2] * combinedReal2 - twiddle1[twiddleOffset1 + innerIndex - 1] * combinedImag2;
+                output[offset9] = twiddle1[twiddleOffset1 + innerIndex - 2] * combinedImag2 + twiddle1[twiddleOffset1 + innerIndex - 1] * combinedReal2;
+                output[radixBlockSize - 1] = twiddle2[twiddleOffset2 + innerIndex - 2] * combinedReal3 - twiddle2[twiddleOffset2 + innerIndex - 1] * combinedImag3;
+                output[radixBlockSize] = twiddle2[twiddleOffset2 + innerIndex - 2] * combinedImag3 + twiddle2[twiddleOffset2 + innerIndex - 1] * combinedReal3;
             }
 
-            t1 += ido;
+            offset1 += innerDimension;
         }
     }
 
-    private static void Dradb4(
-        int ido,
-        int l1,
-        float[] cc,
-        float[] ch,
-        float[] wa1,
-        int index1,
-        float[] wa2,
-        int index2,
-        float[] wa3,
-        int index3)
+    private static void BackwardRadix4(int innerDimension, int groupCount, float[] input, float[] output, float[] twiddle1,
+        int twiddleOffset1, float[] twiddle2, int twiddleOffset2, float[] twiddle3, int twiddleOffset3)
     {
-        int i, k, t0, t1, t2, t3, t4, t5, t6, t7, t8;
-        float ci2, ci3, ci4, cr2, cr3, cr4, ti1, ti2, ti3, ti4, tr1, tr2, tr3, tr4;
-        t0 = l1 * ido;
+        int innerIndex, groupIndex, offset1, offset2, offset3, offset4, offset5, offset6, offset7, offset8;
+        float rotatedImag2, rotatedImag3, rotatedImag4, rotatedReal2, rotatedReal3, rotatedReal4, imag1, imag2, imag3, imag4, real1, real2, real3, real4;
+        var groupBlockSize = groupCount * innerDimension;
 
-        t1 = 0;
-        t2 = ido << 2;
-        t3 = 0;
-        t6 = ido << 1;
-        for (k = 0; k < l1; k++)
+        offset1 = 0;
+        offset2 = innerDimension << 2;
+        offset3 = 0;
+        offset6 = innerDimension << 1;
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            t4 = t3 + t6;
-            t5 = t1;
-            tr3 = cc[t4 - 1] + cc[t4 - 1];
-            tr4 = cc[t4] + cc[t4];
-            tr1 = cc[t3] - cc[(t4 += t6) - 1];
-            tr2 = cc[t3] + cc[t4 - 1];
-            ch[t5] = tr2 + tr3;
-            ch[t5 += t0] = tr1 - tr4;
-            ch[t5 += t0] = tr2 - tr3;
-            ch[t5 += t0] = tr1 + tr4;
-            t1 += ido;
-            t3 += t2;
+            offset4 = offset3 + offset6;
+            offset5 = offset1;
+            real3 = input[offset4 - 1] + input[offset4 - 1];
+            real4 = input[offset4] + input[offset4];
+            real1 = input[offset3] - input[(offset4 += offset6) - 1];
+            real2 = input[offset3] + input[offset4 - 1];
+            output[offset5] = real2 + real3;
+            output[offset5 += groupBlockSize] = real1 - real4;
+            output[offset5 += groupBlockSize] = real2 - real3;
+            output[offset5 += groupBlockSize] = real1 + real4;
+            offset1 += innerDimension;
+            offset3 += offset2;
         }
 
-        if (ido < 2)
+        if (innerDimension < 2)
         {
             return;
         }
 
-        if (ido != 2)
+        if (innerDimension != 2)
         {
-            t1 = 0;
-            for (k = 0; k < l1; k++)
+            offset1 = 0;
+            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
             {
-                t5 = (t4 = (t3 = (t2 = t1 << 2) + t6)) + t6;
-                t7 = t1;
-                for (i = 2; i < ido; i += 2)
+                offset5 = (offset4 = (offset3 = (offset2 = offset1 << 2) + offset6)) + offset6;
+                offset7 = offset1;
+                for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                 {
-                    t2 += 2;
-                    t3 += 2;
-                    t4 -= 2;
-                    t5 -= 2;
-                    t7 += 2;
-                    ti1 = cc[t2] + cc[t5];
-                    ti2 = cc[t2] - cc[t5];
-                    ti3 = cc[t3] - cc[t4];
-                    tr4 = cc[t3] + cc[t4];
-                    tr1 = cc[t2 - 1] - cc[t5 - 1];
-                    tr2 = cc[t2 - 1] + cc[t5 - 1];
-                    ti4 = cc[t3 - 1] - cc[t4 - 1];
-                    tr3 = cc[t3 - 1] + cc[t4 - 1];
-                    ch[t7 - 1] = tr2 + tr3;
-                    cr3 = tr2 - tr3;
-                    ch[t7] = ti2 + ti3;
-                    ci3 = ti2 - ti3;
-                    cr2 = tr1 - tr4;
-                    cr4 = tr1 + tr4;
-                    ci2 = ti1 + ti4;
-                    ci4 = ti1 - ti4;
+                    offset2 += 2;
+                    offset3 += 2;
+                    offset4 -= 2;
+                    offset5 -= 2;
+                    offset7 += 2;
+                    imag1 = input[offset2] + input[offset5];
+                    imag2 = input[offset2] - input[offset5];
+                    imag3 = input[offset3] - input[offset4];
+                    real4 = input[offset3] + input[offset4];
+                    real1 = input[offset2 - 1] - input[offset5 - 1];
+                    real2 = input[offset2 - 1] + input[offset5 - 1];
+                    imag4 = input[offset3 - 1] - input[offset4 - 1];
+                    real3 = input[offset3 - 1] + input[offset4 - 1];
+                    output[offset7 - 1] = real2 + real3;
+                    rotatedReal3 = real2 - real3;
+                    output[offset7] = imag2 + imag3;
+                    rotatedImag3 = imag2 - imag3;
+                    rotatedReal2 = real1 - real4;
+                    rotatedReal4 = real1 + real4;
+                    rotatedImag2 = imag1 + imag4;
+                    rotatedImag4 = imag1 - imag4;
 
-                    ch[(t8 = t7 + t0) - 1] = wa1[index1 + i - 2] * cr2 - wa1[index1 + i - 1] * ci2;
-                    ch[t8] = wa1[index1 + i - 2] * ci2 + wa1[index1 + i - 1] * cr2;
-                    ch[(t8 += t0) - 1] = wa2[index2 + i - 2] * cr3 - wa2[index2 + i - 1] * ci3;
-                    ch[t8] = wa2[index2 + i - 2] * ci3 + wa2[index2 + i - 1] * cr3;
-                    ch[(t8 += t0) - 1] = wa3[index3 + i - 2] * cr4 - wa3[index3 + i - 1] * ci4;
-                    ch[t8] = wa3[index3 + i - 2] * ci4 + wa3[index3 + i - 1] * cr4;
+                    output[(offset8 = offset7 + groupBlockSize) - 1] = twiddle1[twiddleOffset1 + innerIndex - 2] * rotatedReal2 - twiddle1[twiddleOffset1 + innerIndex - 1] * rotatedImag2;
+                    output[offset8] = twiddle1[twiddleOffset1 + innerIndex - 2] * rotatedImag2 + twiddle1[twiddleOffset1 + innerIndex - 1] * rotatedReal2;
+                    output[(offset8 += groupBlockSize) - 1] = twiddle2[twiddleOffset2 + innerIndex - 2] * rotatedReal3 - twiddle2[twiddleOffset2 + innerIndex - 1] * rotatedImag3;
+                    output[offset8] = twiddle2[twiddleOffset2 + innerIndex - 2] * rotatedImag3 + twiddle2[twiddleOffset2 + innerIndex - 1] * rotatedReal3;
+                    output[(offset8 += groupBlockSize) - 1] = twiddle3[twiddleOffset3 + innerIndex - 2] * rotatedReal4 - twiddle3[twiddleOffset3 + innerIndex - 1] * rotatedImag4;
+                    output[offset8] = twiddle3[twiddleOffset3 + innerIndex - 2] * rotatedImag4 + twiddle3[twiddleOffset3 + innerIndex - 1] * rotatedReal4;
                 }
 
-                t1 += ido;
+                offset1 += innerDimension;
             }
 
-            if (ido % 2 == 1)
+            if (innerDimension % 2 == 1)
             {
                 return;
             }
         }
 
-        t1 = ido;
-        t2 = ido << 2;
-        t3 = ido - 1;
-        t4 = ido + (ido << 1);
-        for (k = 0; k < l1; k++)
+        offset1 = innerDimension;
+        offset2 = innerDimension << 2;
+        offset3 = innerDimension - 1;
+        offset4 = innerDimension + (innerDimension << 1);
+        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
         {
-            t5 = t3;
-            ti1 = cc[t1] + cc[t4];
-            ti2 = cc[t4] - cc[t1];
-            tr1 = cc[t1 - 1] - cc[t4 - 1];
-            tr2 = cc[t1 - 1] + cc[t4 - 1];
-            ch[t5] = tr2 + tr2;
-            ch[t5 += t0] = Sqrt2 * (tr1 - ti1);
-            ch[t5 += t0] = ti2 + ti2;
-            ch[t5 += t0] = -Sqrt2 * (tr1 + ti1);
+            offset5 = offset3;
+            imag1 = input[offset1] + input[offset4];
+            imag2 = input[offset4] - input[offset1];
+            real1 = input[offset1 - 1] - input[offset4 - 1];
+            real2 = input[offset1 - 1] + input[offset4 - 1];
+            output[offset5] = real2 + real2;
+            output[offset5 += groupBlockSize] = Sqrt2 * (real1 - imag1);
+            output[offset5 += groupBlockSize] = imag2 + imag2;
+            output[offset5 += groupBlockSize] = -Sqrt2 * (real1 + imag1);
 
-            t3 += ido;
-            t1 += t2;
-            t4 += t2;
+            offset3 += innerDimension;
+            offset1 += offset2;
+            offset4 += offset2;
         }
     }
 
-    private static void Dradbg(
-        int ido,
-        int ip,
-        int l1,
-        int idl1,
-        float[] cc,
-        float[] c1,
-        float[] c2,
-        float[] ch,
-        float[] ch2,
-        float[] wa,
-        int index)
+    private static void BackwardGeneralRadix(int innerDimension, int radix, int groupCount, int groupStride, float[] input,
+        float[] inputByGroup, float[] inputByStride, float[] output, float[] outputByStride, float[] twiddleFactors, int twiddleOffset)
     {
-        int idij, ipph = 0, i, j, k, l, ik, @is, t0 = 0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = 0, t11, t12;
-        float dc2, ai1, ai2, ar1, ar2, ds2;
-        int nbd = 0;
-        float dcp = 0, arg, dsp = 0, ar1h, ar2h;
-        int ipp2 = 0;
+        int twiddleIndex, halfRadixCount = 0, innerIndex, radixIndex, groupIndex, harmonicIndex, strideIndex, twiddleBaseOffset, groupBlockSize = 0, offset1, offset2, offset3, offset4, offset5, offset6, offset7, offset8, offset9, radixBlockSize = 0, offset11, offset12;
+        float cosineStep, imagAccumulator1, imagAccumulator2, realAccumulator1, realAccumulator2, sineStep;
+        int halfInnerDimension = 0;
+        float radixCosineStep = 0, angle, radixSineStep = 0, nextRealAccumulator1, nextRealAccumulator2;
+        int radixOffsetLimit = 0;
         var state = 100;
 
         while (true)
@@ -1121,386 +1077,386 @@ internal class Drft
             switch (state)
             {
                 case 100:
-                    t10 = ip * ido;
-                    t0 = l1 * ido;
-                    arg = Tpi / ip;
-                    dcp = (float)Math.Cos(arg);
-                    dsp = (float)Math.Sin(arg);
-                    nbd = (ido - 1) >> 1;
-                    ipp2 = ip;
-                    ipph = (ip + 1) >> 1;
-                    if (ido < l1)
+                    radixBlockSize = radix * innerDimension;
+                    groupBlockSize = groupCount * innerDimension;
+                    angle = TwoPi / radix;
+                    radixCosineStep = (float)Math.Cos(angle);
+                    radixSineStep = (float)Math.Sin(angle);
+                    halfInnerDimension = (innerDimension - 1) >> 1;
+                    radixOffsetLimit = radix;
+                    halfRadixCount = (radix + 1) >> 1;
+                    if (innerDimension < groupCount)
                     {
                         state = 103;
                         break;
                     }
 
-                    t1 = 0;
-                    t2 = 0;
-                    for (k = 0; k < l1; k++)
+                    offset1 = 0;
+                    offset2 = 0;
+                    for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                     {
-                        t3 = t1;
-                        t4 = t2;
-                        for (i = 0; i < ido; i++)
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        for (innerIndex = 0; innerIndex < innerDimension; innerIndex++)
                         {
-                            ch[t3] = cc[t4];
-                            t3++;
-                            t4++;
+                            output[offset3] = input[offset4];
+                            offset3++;
+                            offset4++;
                         }
 
-                        t1 += ido;
-                        t2 += t10;
+                        offset1 += innerDimension;
+                        offset2 += radixBlockSize;
                     }
 
                     state = 106;
                     break;
                 case 103:
-                    t1 = 0;
-                    for (i = 0; i < ido; i++)
+                    offset1 = 0;
+                    for (innerIndex = 0; innerIndex < innerDimension; innerIndex++)
                     {
-                        t2 = t1;
-                        t3 = t1;
-                        for (k = 0; k < l1; k++)
+                        offset2 = offset1;
+                        offset3 = offset1;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            ch[t2] = cc[t3];
-                            t2 += ido;
-                            t3 += t10;
+                            output[offset2] = input[offset3];
+                            offset2 += innerDimension;
+                            offset3 += radixBlockSize;
                         }
 
-                        t1++;
+                        offset1++;
                     }
 
                     goto case 106;
                 case 106:
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    t7 = t5 = ido << 1;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    offset7 = offset5 = innerDimension << 1;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1;
-                        t4 = t2;
-                        t6 = t5;
-                        for (k = 0; k < l1; k++)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        offset6 = offset5;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            ch[t3] = cc[t6 - 1] + cc[t6 - 1];
-                            ch[t4] = cc[t6] + cc[t6];
-                            t3 += ido;
-                            t4 += ido;
-                            t6 += t10;
+                            output[offset3] = input[offset6 - 1] + input[offset6 - 1];
+                            output[offset4] = input[offset6] + input[offset6];
+                            offset3 += innerDimension;
+                            offset4 += innerDimension;
+                            offset6 += radixBlockSize;
                         }
 
-                        t5 += t7;
+                        offset5 += offset7;
                     }
 
-                    if (ido == 1)
+                    if (innerDimension == 1)
                     {
                         state = 116;
                         break;
                     }
 
-                    if (nbd < l1)
+                    if (halfInnerDimension < groupCount)
                     {
                         state = 112;
                         break;
                     }
 
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    t7 = 0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    offset7 = 0;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1;
-                        t4 = t2;
-                        t7 += ido << 1;
-                        t8 = t7;
-                        for (k = 0; k < l1; k++)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        offset7 += innerDimension << 1;
+                        offset8 = offset7;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            t5 = t3;
-                            t6 = t4;
-                            t9 = t8;
-                            t11 = t8;
-                            for (i = 2; i < ido; i += 2)
+                            offset5 = offset3;
+                            offset6 = offset4;
+                            offset9 = offset8;
+                            offset11 = offset8;
+                            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                             {
-                                t5 += 2;
-                                t6 += 2;
-                                t9 += 2;
-                                t11 -= 2;
-                                ch[t5 - 1] = cc[t9 - 1] + cc[t11 - 1];
-                                ch[t6 - 1] = cc[t9 - 1] - cc[t11 - 1];
-                                ch[t5] = cc[t9] - cc[t11];
-                                ch[t6] = cc[t9] + cc[t11];
+                                offset5 += 2;
+                                offset6 += 2;
+                                offset9 += 2;
+                                offset11 -= 2;
+                                output[offset5 - 1] = input[offset9 - 1] + input[offset11 - 1];
+                                output[offset6 - 1] = input[offset9 - 1] - input[offset11 - 1];
+                                output[offset5] = input[offset9] - input[offset11];
+                                output[offset6] = input[offset9] + input[offset11];
                             }
 
-                            t3 += ido;
-                            t4 += ido;
-                            t8 += t10;
+                            offset3 += innerDimension;
+                            offset4 += innerDimension;
+                            offset8 += radixBlockSize;
                         }
                     }
 
                     state = 116;
                     break;
                 case 112:
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    t7 = 0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    offset7 = 0;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1;
-                        t4 = t2;
-                        t7 += ido << 1;
-                        t8 = t7;
-                        t9 = t7;
-                        for (i = 2; i < ido; i += 2)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        offset7 += innerDimension << 1;
+                        offset8 = offset7;
+                        offset9 = offset7;
+                        for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                         {
-                            t3 += 2;
-                            t4 += 2;
-                            t8 += 2;
-                            t9 -= 2;
-                            t5 = t3;
-                            t6 = t4;
-                            t11 = t8;
-                            t12 = t9;
-                            for (k = 0; k < l1; k++)
+                            offset3 += 2;
+                            offset4 += 2;
+                            offset8 += 2;
+                            offset9 -= 2;
+                            offset5 = offset3;
+                            offset6 = offset4;
+                            offset11 = offset8;
+                            offset12 = offset9;
+                            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                             {
-                                ch[t5 - 1] = cc[t11 - 1] + cc[t12 - 1];
-                                ch[t6 - 1] = cc[t11 - 1] - cc[t12 - 1];
-                                ch[t5] = cc[t11] - cc[t12];
-                                ch[t6] = cc[t11] + cc[t12];
-                                t5 += ido;
-                                t6 += ido;
-                                t11 += t10;
-                                t12 += t10;
+                                output[offset5 - 1] = input[offset11 - 1] + input[offset12 - 1];
+                                output[offset6 - 1] = input[offset11 - 1] - input[offset12 - 1];
+                                output[offset5] = input[offset11] - input[offset12];
+                                output[offset6] = input[offset11] + input[offset12];
+                                offset5 += innerDimension;
+                                offset6 += innerDimension;
+                                offset11 += radixBlockSize;
+                                offset12 += radixBlockSize;
                             }
                         }
                     }
 
                     goto case 116;
                 case 116:
-                    ar1 = 1f;
-                    ai1 = 0f;
-                    t1 = 0;
-                    t9 = t2 = ipp2 * idl1;
-                    t3 = (ip - 1) * idl1;
-                    for (l = 1; l < ipph; l++)
+                    realAccumulator1 = 1f;
+                    imagAccumulator1 = 0f;
+                    offset1 = 0;
+                    offset9 = offset2 = radixOffsetLimit * groupStride;
+                    offset3 = (radix - 1) * groupStride;
+                    for (harmonicIndex = 1; harmonicIndex < halfRadixCount; harmonicIndex++)
                     {
-                        t1 += idl1;
-                        t2 -= idl1;
+                        offset1 += groupStride;
+                        offset2 -= groupStride;
 
-                        ar1h = dcp * ar1 - dsp * ai1;
-                        ai1 = dcp * ai1 + dsp * ar1;
-                        ar1 = ar1h;
-                        t4 = t1;
-                        t5 = t2;
-                        t6 = 0;
-                        t7 = idl1;
-                        t8 = t3;
-                        for (ik = 0; ik < idl1; ik++)
+                        nextRealAccumulator1 = radixCosineStep * realAccumulator1 - radixSineStep * imagAccumulator1;
+                        imagAccumulator1 = radixCosineStep * imagAccumulator1 + radixSineStep * realAccumulator1;
+                        realAccumulator1 = nextRealAccumulator1;
+                        offset4 = offset1;
+                        offset5 = offset2;
+                        offset6 = 0;
+                        offset7 = groupStride;
+                        offset8 = offset3;
+                        for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                         {
-                            c2[t4++] = ch2[t6++] + ar1 * ch2[t7++];
-                            c2[t5++] = ai1 * ch2[t8++];
+                            inputByStride[offset4++] = outputByStride[offset6++] + realAccumulator1 * outputByStride[offset7++];
+                            inputByStride[offset5++] = imagAccumulator1 * outputByStride[offset8++];
                         }
 
-                        dc2 = ar1;
-                        ds2 = ai1;
-                        ar2 = ar1;
-                        ai2 = ai1;
+                        cosineStep = realAccumulator1;
+                        sineStep = imagAccumulator1;
+                        realAccumulator2 = realAccumulator1;
+                        imagAccumulator2 = imagAccumulator1;
 
-                        t6 = idl1;
-                        t7 = t9 - idl1;
-                        for (j = 2; j < ipph; j++)
+                        offset6 = groupStride;
+                        offset7 = offset9 - groupStride;
+                        for (radixIndex = 2; radixIndex < halfRadixCount; radixIndex++)
                         {
-                            t6 += idl1;
-                            t7 -= idl1;
-                            ar2h = dc2 * ar2 - ds2 * ai2;
-                            ai2 = dc2 * ai2 + ds2 * ar2;
-                            ar2 = ar2h;
-                            t4 = t1;
-                            t5 = t2;
-                            t11 = t6;
-                            t12 = t7;
-                            for (ik = 0; ik < idl1; ik++)
+                            offset6 += groupStride;
+                            offset7 -= groupStride;
+                            nextRealAccumulator2 = cosineStep * realAccumulator2 - sineStep * imagAccumulator2;
+                            imagAccumulator2 = cosineStep * imagAccumulator2 + sineStep * realAccumulator2;
+                            realAccumulator2 = nextRealAccumulator2;
+                            offset4 = offset1;
+                            offset5 = offset2;
+                            offset11 = offset6;
+                            offset12 = offset7;
+                            for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                             {
-                                c2[t4++] += ar2 * ch2[t11++];
-                                c2[t5++] += ai2 * ch2[t12++];
+                                inputByStride[offset4++] += realAccumulator2 * outputByStride[offset11++];
+                                inputByStride[offset5++] += imagAccumulator2 * outputByStride[offset12++];
                             }
                         }
                     }
 
-                    t1 = 0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += idl1;
-                        t2 = t1;
-                        for (ik = 0; ik < idl1; ik++)
+                        offset1 += groupStride;
+                        offset2 = offset1;
+                        for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                         {
-                            ch2[ik] += ch2[t2++];
+                            outputByStride[strideIndex] += outputByStride[offset2++];
                         }
                     }
 
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1;
-                        t4 = t2;
-                        for (k = 0; k < l1; k++)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            ch[t3] = c1[t3] - c1[t4];
-                            ch[t4] = c1[t3] + c1[t4];
-                            t3 += ido;
-                            t4 += ido;
+                            output[offset3] = inputByGroup[offset3] - inputByGroup[offset4];
+                            output[offset4] = inputByGroup[offset3] + inputByGroup[offset4];
+                            offset3 += innerDimension;
+                            offset4 += innerDimension;
                         }
                     }
 
-                    if (ido == 1)
+                    if (innerDimension == 1)
                     {
                         state = 132;
                         break;
                     }
 
-                    if (nbd < l1)
+                    if (halfInnerDimension < groupCount)
                     {
                         state = 128;
                         break;
                     }
 
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1;
-                        t4 = t2;
-                        for (k = 0; k < l1; k++)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            t5 = t3;
-                            t6 = t4;
-                            for (i = 2; i < ido; i += 2)
+                            offset5 = offset3;
+                            offset6 = offset4;
+                            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                             {
-                                t5 += 2;
-                                t6 += 2;
-                                ch[t5 - 1] = c1[t5 - 1] - c1[t6];
-                                ch[t6 - 1] = c1[t5 - 1] + c1[t6];
-                                ch[t5] = c1[t5] + c1[t6 - 1];
-                                ch[t6] = c1[t5] - c1[t6 - 1];
+                                offset5 += 2;
+                                offset6 += 2;
+                                output[offset5 - 1] = inputByGroup[offset5 - 1] - inputByGroup[offset6];
+                                output[offset6 - 1] = inputByGroup[offset5 - 1] + inputByGroup[offset6];
+                                output[offset5] = inputByGroup[offset5] + inputByGroup[offset6 - 1];
+                                output[offset6] = inputByGroup[offset5] - inputByGroup[offset6 - 1];
                             }
 
-                            t3 += ido;
-                            t4 += ido;
+                            offset3 += innerDimension;
+                            offset4 += innerDimension;
                         }
                     }
 
                     state = 132;
                     break;
                 case 128:
-                    t1 = 0;
-                    t2 = ipp2 * t0;
-                    for (j = 1; j < ipph; j++)
+                    offset1 = 0;
+                    offset2 = radixOffsetLimit * groupBlockSize;
+                    for (radixIndex = 1; radixIndex < halfRadixCount; radixIndex++)
                     {
-                        t1 += t0;
-                        t2 -= t0;
-                        t3 = t1;
-                        t4 = t2;
-                        for (i = 2; i < ido; i += 2)
+                        offset1 += groupBlockSize;
+                        offset2 -= groupBlockSize;
+                        offset3 = offset1;
+                        offset4 = offset2;
+                        for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                         {
-                            t3 += 2;
-                            t4 += 2;
-                            t5 = t3;
-                            t6 = t4;
-                            for (k = 0; k < l1; k++)
+                            offset3 += 2;
+                            offset4 += 2;
+                            offset5 = offset3;
+                            offset6 = offset4;
+                            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                             {
-                                ch[t5 - 1] = c1[t5 - 1] - c1[t6];
-                                ch[t6 - 1] = c1[t5 - 1] + c1[t6];
-                                ch[t5] = c1[t5] + c1[t6 - 1];
-                                ch[t6] = c1[t5] - c1[t6 - 1];
-                                t5 += ido;
-                                t6 += ido;
+                                output[offset5 - 1] = inputByGroup[offset5 - 1] - inputByGroup[offset6];
+                                output[offset6 - 1] = inputByGroup[offset5 - 1] + inputByGroup[offset6];
+                                output[offset5] = inputByGroup[offset5] + inputByGroup[offset6 - 1];
+                                output[offset6] = inputByGroup[offset5] - inputByGroup[offset6 - 1];
+                                offset5 += innerDimension;
+                                offset6 += innerDimension;
                             }
                         }
                     }
 
                     goto case 132;
                 case 132:
-                    if (ido == 1)
+                    if (innerDimension == 1)
                     {
                         return;
                     }
 
-                    for (ik = 0; ik < idl1; ik++)
+                    for (strideIndex = 0; strideIndex < groupStride; strideIndex++)
                     {
-                        c2[ik] = ch2[ik];
+                        inputByStride[strideIndex] = outputByStride[strideIndex];
                     }
 
-                    t1 = 0;
-                    for (j = 1; j < ip; j++)
+                    offset1 = 0;
+                    for (radixIndex = 1; radixIndex < radix; radixIndex++)
                     {
-                        t2 = t1 += t0;
-                        for (k = 0; k < l1; k++)
+                        offset2 = offset1 += groupBlockSize;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            c1[t2] = ch[t2];
-                            t2 += ido;
+                            inputByGroup[offset2] = output[offset2];
+                            offset2 += innerDimension;
                         }
                     }
 
-                    if (nbd > l1)
+                    if (halfInnerDimension > groupCount)
                     {
                         state = 139;
                         break;
                     }
 
-                    @is = -ido - 1;
-                    t1 = 0;
-                    for (j = 1; j < ip; j++)
+                    twiddleBaseOffset = -innerDimension - 1;
+                    offset1 = 0;
+                    for (radixIndex = 1; radixIndex < radix; radixIndex++)
                     {
-                        @is += ido;
-                        t1 += t0;
-                        idij = @is;
-                        t2 = t1;
-                        for (i = 2; i < ido; i += 2)
+                        twiddleBaseOffset += innerDimension;
+                        offset1 += groupBlockSize;
+                        twiddleIndex = twiddleBaseOffset;
+                        offset2 = offset1;
+                        for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                         {
-                            t2 += 2;
-                            idij += 2;
-                            t3 = t2;
-                            for (k = 0; k < l1; k++)
+                            offset2 += 2;
+                            twiddleIndex += 2;
+                            offset3 = offset2;
+                            for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                             {
-                                c1[t3 - 1] = wa[index + idij - 1] * ch[t3 - 1] - wa[index + idij] * ch[t3];
-                                c1[t3] = wa[index + idij - 1] * ch[t3] + wa[index + idij] * ch[t3 - 1];
-                                t3 += ido;
+                                inputByGroup[offset3 - 1] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * output[offset3 - 1] - twiddleFactors[twiddleOffset + twiddleIndex] * output[offset3];
+                                inputByGroup[offset3] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * output[offset3] + twiddleFactors[twiddleOffset + twiddleIndex] * output[offset3 - 1];
+                                offset3 += innerDimension;
                             }
                         }
                     }
 
                     return;
                 case 139:
-                    @is = -ido - 1;
-                    t1 = 0;
-                    for (j = 1; j < ip; j++)
+                    twiddleBaseOffset = -innerDimension - 1;
+                    offset1 = 0;
+                    for (radixIndex = 1; radixIndex < radix; radixIndex++)
                     {
-                        @is += ido;
-                        t1 += t0;
-                        t2 = t1;
-                        for (k = 0; k < l1; k++)
+                        twiddleBaseOffset += innerDimension;
+                        offset1 += groupBlockSize;
+                        offset2 = offset1;
+                        for (groupIndex = 0; groupIndex < groupCount; groupIndex++)
                         {
-                            idij = @is;
-                            t3 = t2;
-                            for (i = 2; i < ido; i += 2)
+                            twiddleIndex = twiddleBaseOffset;
+                            offset3 = offset2;
+                            for (innerIndex = 2; innerIndex < innerDimension; innerIndex += 2)
                             {
-                                idij += 2;
-                                t3 += 2;
-                                c1[t3 - 1] = wa[index + idij - 1] * ch[t3 - 1] - wa[index + idij] * ch[t3];
-                                c1[t3] = wa[index + idij - 1] * ch[t3] + wa[index + idij] * ch[t3 - 1];
+                                twiddleIndex += 2;
+                                offset3 += 2;
+                                inputByGroup[offset3 - 1] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * output[offset3 - 1] - twiddleFactors[twiddleOffset + twiddleIndex] * output[offset3];
+                                inputByGroup[offset3] = twiddleFactors[twiddleOffset + twiddleIndex - 1] * output[offset3] + twiddleFactors[twiddleOffset + twiddleIndex] * output[offset3 - 1];
                             }
 
-                            t2 += ido;
+                            offset2 += innerDimension;
                         }
                     }
 
@@ -1509,18 +1465,20 @@ internal class Drft
         }
     }
 
-    private static void Drftb1(int n, float[] c, float[] ch, float[] wa, int index, int[] ifac)
+    private static void BackwardTransformInternal(int size, float[] data, float[] output, float[] twiddleFactors, int twiddleOffset, int[] factorCache)
     {
-        int i, k1, l1, l2 = 0;
-        int na;
-        int nf, ip = 0, iw, ix2, ix3, ido = 0, idl1 = 0;
+        int innerIndex, factorStageIndex, nextGroupCount = 0;
+        var radix = 0;
+        int twiddleStart2;
+        int twiddleStart3;
+        var innerDimension = 0;
+        var groupStride = 0;
+        var factorCount = factorCache[1];
+        var activeBuffer = 0;
+        var groupCount = 1;
+        var twiddleStart = 1;
 
-        nf = ifac[1];
-        na = 0;
-        l1 = 1;
-        iw = 1;
-
-        for (k1 = 0; k1 < nf; k1++)
+        for (factorStageIndex = 0; factorStageIndex < factorCount; factorStageIndex++)
         {
             var state = 100;
             while (true)
@@ -1528,89 +1486,89 @@ internal class Drft
                 switch (state)
                 {
                     case 100:
-                        ip = ifac[k1 + 2];
-                        l2 = ip * l1;
-                        ido = n / l2;
-                        idl1 = ido * l1;
-                        if (ip != 4)
+                        radix = factorCache[factorStageIndex + 2];
+                        nextGroupCount = radix * groupCount;
+                        innerDimension = size / nextGroupCount;
+                        groupStride = innerDimension * groupCount;
+                        if (radix != 4)
                         {
                             state = 103;
                             break;
                         }
 
-                        ix2 = iw + ido;
-                        ix3 = ix2 + ido;
+                        twiddleStart2 = twiddleStart + innerDimension;
+                        twiddleStart3 = twiddleStart2 + innerDimension;
 
-                        if (na != 0)
+                        if (activeBuffer != 0)
                         {
-                            Dradb4(ido, l1, ch, c, wa, index + iw - 1, wa, index + ix2 - 1, wa, index + ix3 - 1);
+                            BackwardRadix4(innerDimension, groupCount, output, data, twiddleFactors, twiddleOffset + twiddleStart - 1, twiddleFactors, twiddleOffset + twiddleStart2 - 1, twiddleFactors, twiddleOffset + twiddleStart3 - 1);
                         }
                         else
                         {
-                            Dradb4(ido, l1, c, ch, wa, index + iw - 1, wa, index + ix2 - 1, wa, index + ix3 - 1);
+                            BackwardRadix4(innerDimension, groupCount, data, output, twiddleFactors, twiddleOffset + twiddleStart - 1, twiddleFactors, twiddleOffset + twiddleStart2 - 1, twiddleFactors, twiddleOffset + twiddleStart3 - 1);
                         }
 
-                        na = 1 - na;
+                        activeBuffer = 1 - activeBuffer;
                         state = 115;
                         break;
                     case 103:
-                        if (ip != 2)
+                        if (radix != 2)
                         {
                             state = 106;
                             break;
                         }
 
-                        if (na != 0)
+                        if (activeBuffer != 0)
                         {
-                            Dradb2(ido, l1, ch, c, wa, index + iw - 1);
+                            BackwardRadix2(innerDimension, groupCount, output, data, twiddleFactors, twiddleOffset + twiddleStart - 1);
                         }
                         else
                         {
-                            Dradb2(ido, l1, c, ch, wa, index + iw - 1);
+                            BackwardRadix2(innerDimension, groupCount, data, output, twiddleFactors, twiddleOffset + twiddleStart - 1);
                         }
 
-                        na = 1 - na;
+                        activeBuffer = 1 - activeBuffer;
                         state = 115;
                         break;
                     case 106:
-                        if (ip != 3)
+                        if (radix != 3)
                         {
                             state = 109;
                             break;
                         }
 
-                        ix2 = iw + ido;
-                        if (na != 0)
+                        twiddleStart2 = twiddleStart + innerDimension;
+                        if (activeBuffer != 0)
                         {
-                            Dradb3(ido, l1, ch, c, wa, index + iw - 1, wa, index + ix2 - 1);
+                            BackwardRadix3(innerDimension, groupCount, output, data, twiddleFactors, twiddleOffset + twiddleStart - 1, twiddleFactors, twiddleOffset + twiddleStart2 - 1);
                         }
                         else
                         {
-                            Dradb3(ido, l1, c, ch, wa, index + iw - 1, wa, index + ix2 - 1);
+                            BackwardRadix3(innerDimension, groupCount, data, output, twiddleFactors, twiddleOffset + twiddleStart - 1, twiddleFactors, twiddleOffset + twiddleStart2 - 1);
                         }
 
-                        na = 1 - na;
+                        activeBuffer = 1 - activeBuffer;
                         state = 115;
                         break;
                     case 109:
-                        if (na != 0)
+                        if (activeBuffer != 0)
                         {
-                            Dradbg(ido, ip, l1, idl1, ch, ch, ch, c, c, wa, index + iw - 1);
+                            BackwardGeneralRadix(innerDimension, radix, groupCount, groupStride, output, output, output, data, data, twiddleFactors, twiddleOffset + twiddleStart - 1);
                         }
                         else
                         {
-                            Dradbg(ido, ip, l1, idl1, c, c, c, ch, ch, wa, index + iw - 1);
+                            BackwardGeneralRadix(innerDimension, radix, groupCount, groupStride, data, data, data, output, output, twiddleFactors, twiddleOffset + twiddleStart - 1);
                         }
 
-                        if (ido == 1)
+                        if (innerDimension == 1)
                         {
-                            na = 1 - na;
+                            activeBuffer = 1 - activeBuffer;
                         }
 
                         goto case 115;
                     case 115:
-                        l1 = l2;
-                        iw += (ip - 1) * ido;
+                        groupCount = nextGroupCount;
+                        twiddleStart += (radix - 1) * innerDimension;
                         goto EndLoop;
                 }
             }
@@ -1619,14 +1577,14 @@ internal class Drft
             ;
         }
 
-        if (na == 0)
+        if (activeBuffer == 0)
         {
             return;
         }
 
-        for (i = 0; i < n; i++)
+        for (innerIndex = 0; innerIndex < size; innerIndex++)
         {
-            c[i] = ch[i];
+            data[innerIndex] = output[innerIndex];
         }
     }
 }

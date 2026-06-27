@@ -125,7 +125,7 @@ internal sealed class Floor0 : FuncFloor
                         Array.Clear(_lsp, 0, look.M);
                     }
 
-                    var book = block.Vd.FullBooks[info.Books[bookNumber]];
+                    var book = block.Dsp.FullBooks[info.Books[bookNumber]];
                     var last = 0.0f;
 
                     for (var j = 0; j < look.M; j++)
@@ -180,7 +180,7 @@ internal sealed class Floor0 : FuncFloor
 
             if (bookNumber != -1 && bookNumber < info.NumBooks)
             {
-                var book = block.Vd.FullBooks[info.Books[bookNumber]];
+                var book = block.Dsp.FullBooks[info.Books[bookNumber]];
                 var last = 0.0f;
 
                 if (lsp == null || lsp.Length < look.M + 1)

@@ -177,7 +177,7 @@ internal class Mapping0 : FuncMapping
 
     public override int Inverse(Block block, object lookObject)
     {
-        var dspState = block.Vd;
+        var dspState = block.Dsp;
         var info = dspState.Vi;
         var look = (LookMapping0)lookObject;
         var mappingInfo = look.Map;
