@@ -194,7 +194,7 @@ public class Info
     Huffman.clearHuffmanTrees(HuffRoot);
   }
 
-  public int decodeHeader (Comment cc, Packet op)
+  public int decodeHeader (Comment cc, PacketContext op)
   {
     long ret;
     Buffer opb = new Buffer();
