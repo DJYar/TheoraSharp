@@ -4,17 +4,20 @@ namespace TheoraSharp;
 
 public class OggStream
 {
-    public int serialno;
-    public StreamState os;
-    public bool bos;
-    public IDecoder decoder;
-
+    public StreamState Stream { get; init; }
+    public int Serial { get; init; }
+    
+    public bool AtBeginning;
+    public IDecoder Decoder;
+    
     public OggStream(int serial)
     {
-        serialno = serial;
-        os = new StreamState();
-        os.init(serial);
-        os.reset();
-        bos = true;
+        Serial = serial;
+        
+        Stream = new StreamState();
+        Stream.Initialize(serial);
+        Stream.Reset();
+        
+        AtBeginning = true;
     }
 }

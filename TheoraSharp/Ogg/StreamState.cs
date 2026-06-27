@@ -1,469 +1,479 @@
-﻿using System.Text;
-
 namespace TheoraSharp.Ogg;
 
 public class StreamState
 {
-    byte[] body_data;    /* bytes from packet bodies */
-  int body_storage;    /* storage elements allocated */
-  int body_fill;       /* elements stored; fill mark */
-private  int body_returned;   /* elements of fill returned */
+    private const int InitialBodyStorage = 16 * 1024;
+    private const int InitialLacingStorage = 1024;
+    private const int HeaderBufferSize = 282;
+    private const int MaxPageSegments = 255;
+    private const int NominalPageBodySize = 4096;
 
+    private const int BeginningOfPacketFlag = 0x100;
+    private const int EndOfStreamFlag = 0x200;
+    private const int LostSyncFlag = 0x400;
 
-  int[] lacing_vals;    /* The values that will go to the segment table */
-  long[] granule_vals;  /* pcm_pos values for headers. Not compact
-			   this way, but it is simple coupled to the
-			   lacing fifo */
-  int lacing_storage;
-  int lacing_fill;
-  int lacing_packet;
-  int lacing_returned;
+    private byte[] _bodyData;
+    private int _bodyStorage;
+    private int _bodyFill;
+    private int _bodyReturned;
 
-  byte[] header=new byte[282];      /* working space for header encode */
-  int header_fill;
+    private int[] _lacingValues;
+    private int _lacingStorage;
+    private int _lacingFill;
+    private int _lacingPacket;
+    private int _lacingReturned;
 
-  public int e_o_s;   /* set when we have buffered the last packet in the
-			 logical bitstream */
-  int b_o_s;          /* set after we've written the initial page
-			 of a logical bitstream */
-  int serialno;
-  int pageno;
-  long packetno;      /* sequence number for decode; the framing
-                         knows where there's a hole in the data,
-                         but we need coupling so that the codec
-                         (which is in a seperate abstraction
-                         layer) also knows about the gap */
-  long granulepos;
+    private readonly byte[] _headerBuffer = new byte[HeaderBufferSize];
+    private int _headerFill;
 
-  public StreamState(){
-    init();
-  }
-
-  StreamState(int serialno){
-    init(serialno);
-  }
-  void init(){
-    body_storage=16*1024;
-    body_data=new byte[body_storage];
-    lacing_storage=1024;
-    lacing_vals=new int[lacing_storage];
-    granule_vals=new long[lacing_storage];
-  }
-  public void init(int serialno){
-    if(body_data==null){ init(); }
-    else{
-      for(int i=0; i<body_data.Length; i++) body_data[i]=0;
-      for(int i=0; i<lacing_vals.Length; i++) lacing_vals[i]=0;
-      for(int i=0; i<granule_vals.Length; i++) granule_vals[i]=0;
-    }
-    this.serialno=serialno;
-  }
-  public void clear(){
-    body_data=null;
-    lacing_vals=null;
-    granule_vals=null; 
-  }
-  void destroy(){
-    clear();
-  }
-  void body_expand(int needed){
-    if(body_storage<=body_fill+needed){
-      body_storage+=(needed+1024);
-      byte[] foo=new byte[body_storage];
-      Array.Copy(body_data, 0, foo, 0, body_data.Length);
-      body_data=foo;
-    }
-  }
-  void lacing_expand(int needed){
-    if(lacing_storage<=lacing_fill+needed){
-      lacing_storage+=(needed+32);
-      int[] foo=new int[lacing_storage];
-      Array.Copy(lacing_vals, 0, foo, 0, lacing_vals.Length);
-      lacing_vals=foo;
-
-      long[] bar=new long[lacing_storage];
-      Array.Copy(granule_vals, 0, bar, 0, granule_vals.Length);
-      granule_vals=bar;
-    }
-  }
-
-  /* submit data to the internal buffer of the framing engine */
-  public int packetin(Packet op){
-    int lacing_val=op.Bytes/255+1;
-
-    if(body_returned!=0){
-      /* advance packet data according to the body_returned pointer. We
-         had to keep it around to return a pointer into the buffer last
-         call */
+    private long[] _granuleValues;
+    private long _granulePosition;
     
-      body_fill-=body_returned;
-      if(body_fill!=0){
-        Array.Copy(body_data, body_returned, body_data, 0, body_fill);
-      }
-      body_returned=0;
-    }
+    private int _beginningOfStream;
+    private int _endOfStream;
+    private int _serialNumber;
+    private int _pageNumber;
+    private long _packetNumber;
 
-    /* make sure we have the buffer storage */
-    body_expand(op.Bytes);
-    lacing_expand(lacing_val);
-
-  /* Copy in the submitted packet.  Yes, the copy is a waste; this is
-     the liability of overly clean abstraction for the time being.  It
-     will actually be fairly easy to eliminate the extra copy in the
-     future */
-
-    Array.Copy(op.PacketBase, op.PacketPos, body_data, body_fill, op.Bytes);
-    body_fill+=op.Bytes;
-
-  /* Store lacing vals for this packet */
-    int j;
-    for(j=0;j<lacing_val-1;j++){
-      lacing_vals[lacing_fill+j]=255;
-      granule_vals[lacing_fill+j]=granulepos;
-    }
-    lacing_vals[lacing_fill+j]=(op.Bytes)%255;
-    granulepos=granule_vals[lacing_fill+j]=op.GranulePos;
-
-  /* flag the first segment as the beginning of the packet */
-    lacing_vals[lacing_fill]|= 0x100;
-
-    lacing_fill+=lacing_val;
-
-  /* for the sake of completeness */
-    packetno++;
-
-    if(op.EOS!=0)e_o_s=1;
-    return(0);
-  }
-
-  public int packetout(Packet op){
-
-  /* The last part of decode. We have the stream broken into packet
-     segments.  Now we need to group them into packets (or return the
-     out of sync markers) */
-
-    int ptr=lacing_returned;
-
-    if(lacing_packet<=ptr){
-      return(0);
-    }
-
-    if((lacing_vals[ptr]&0x400)!=0){
-    /* We lost sync here; let the app know */
-      lacing_returned++;
-
-    /* we need to tell the codec there's a gap; it might need to
-       handle previous packet dependencies. */
-      packetno++;
-      return(-1);
-    }
-
-  /* Gather the whole packet. We'll have no holes or a partial packet */
-    {
-      int size=lacing_vals[ptr]&0xff;
-      int bytes=0;
-
-      op.PacketBase=body_data;
-      op.PacketPos=body_returned;
-      op.EOS=lacing_vals[ptr]&0x200; /* last packet of the stream? */
-      op.BOS=lacing_vals[ptr]&0x100; /* first packet of the stream? */
-      bytes+=size;
-
-      while(size==255){
-	int val=lacing_vals[++ptr];
-	size=val&0xff;
-	if((val&0x200)!=0)op.EOS=0x200;
-	bytes+=size;
-      }
-
-      op.PacketNo=packetno;
-      op.GranulePos=granule_vals[ptr];
-      op.Bytes=bytes;
-
-      body_returned+=bytes;
-
-      lacing_returned=ptr+1;
-    }
-    packetno++;
-    return(1);
-  }
-
-
-  // add the incoming page to the stream state; we decompose the page
-  // into packet segments here as well.
-
-  public int pagein(Page og){
-    byte[] header_base=og.header_base;
-    int header=og.header;
-    byte[] body_base=og.body_base;
-    int body=og.body;
-    int bodysize=og.body_len;
-    int segptr=0;
-
-    int version=og.version();
-    int continued=og.continued();
-    int bos=og.bos();
-    int eos=og.eos();
-    long granulepos=og.granulepos();
-    int _serialno=og.serialno();
-    int _pageno=og.pageno();
-    int segments=header_base[header+26]&0xff;
-
-    // clean up 'returned data'
-    {
-      int lr=lacing_returned;
-      int br=body_returned;
-
-      // body data
-
-      if(br!=0){
-        body_fill-=br;
-        if(body_fill!=0){
-	  Array.Copy(body_data, br, body_data, 0, body_fill);
-	}
-	body_returned=0;
-      }
-
-      if(lr!=0){
-        // segment table
-	if((lacing_fill-lr)!=0){
-	  Array.Copy(lacing_vals, lr, lacing_vals, 0, lacing_fill-lr);
-	  Array.Copy(granule_vals, lr, granule_vals, 0, lacing_fill-lr);
-	}
-	lacing_fill-=lr;
-	lacing_packet-=lr;
-	lacing_returned=0;
-      }
-    }
-
-    // check the serial number
-    if(_serialno!=serialno)return(-1);
-    if(version>0)return(-1);
-
-    lacing_expand(segments+1);
-
-    // are we in sequence?
-    if(_pageno!=pageno){
-      int i;
-      // unroll previous partial packet (if any)
-      for(i=lacing_packet;i<lacing_fill;i++){
-	body_fill-=lacing_vals[i]&0xff;
-      }
-      lacing_fill=lacing_packet;
-
-      // make a note of dropped data in segment table
-      if(pageno!=-1){
-	lacing_vals[lacing_fill++]=0x400;
-	lacing_packet++;
-      }
-    }
+    public int EndOfStream => _endOfStream;
     
-    // are we a 'continued packet' page?  If so, we'll need to skip
-    // some segments
-    if(continued!=0){
-      if(lacing_fill<1 ||
-         lacing_vals[lacing_fill-1]==0x400){
-         bos=0;
-	for(;segptr<segments;segptr++){
-	  int val=(header_base[header+27+segptr]&0xff);
-	  body+=val;
-	  bodysize-=val;
-	  if(val<255){
-	    segptr++;
-	    break;
-	  }
-	}
-      }
-    }
-
-    if(bodysize!=0){
-      body_expand(bodysize);
-      Array.Copy(body_base, body, body_data, body_fill, bodysize);
-      body_fill+=bodysize;
-    }
-
+    public StreamState()
     {
-      int saved=-1;
-      while(segptr<segments){
-	int val=(header_base[header+27+segptr]&0xff);
-	lacing_vals[lacing_fill]=val;
-	granule_vals[lacing_fill]=-1;
-      
-	if(bos!=0){
-	  lacing_vals[lacing_fill]|=0x100;
-	  bos=0;
-	}
-      
-	if(val<255)saved=lacing_fill;
-      
-	lacing_fill++;
-	segptr++;
-      
-	if(val<255)lacing_packet=lacing_fill;
-      }
-  
-    /* set the granulepos on the last pcmval of the last full packet */
-      if(saved!=-1){
-	granule_vals[saved]=granulepos;
-      }
+        InitializeStorage();
     }
 
-    if(eos!=0){
-      e_o_s=1;
-      if(lacing_fill>0)
-	lacing_vals[lacing_fill-1]|=0x200;
-    }
-
-    pageno=_pageno+1;
-    return(0);
-  }
-
-
-
-  public int flush(Page og){
-
-    int i;
-    int vals=0;
-    int maxvals=(lacing_fill>255?255:lacing_fill);
-    int bytes=0;
-    int acc=0;
-    long granule_pos=granule_vals[0];
-
-    if(maxvals==0)return(0);
-  
-    /* construct a page */
-    /* decide how many segments to include */
-  
-    /* If this is the initial header case, the first page must only include
-       the initial header packet */
-    if(b_o_s==0){  /* 'initial header page' case */
-      granule_pos=0;
-      for(vals=0;vals<maxvals;vals++){
-        if((lacing_vals[vals]&0x0ff)<255){
-	  vals++;
-	  break;
+    public void Initialize(int serialNumber)
+    {
+        if (_bodyData == null)
+        {
+            InitializeStorage();
         }
-      }
-    }
-    else{
-      for(vals=0;vals<maxvals;vals++){
-        if(acc>4096)break;
-        acc+=(lacing_vals[vals]&0x0ff);
-        granule_pos=granule_vals[vals];
-      }
-    }
+        else
+        {
+            Array.Clear(_bodyData, 0, _bodyData.Length);
+            Array.Clear(_lacingValues, 0, _lacingValues.Length);
+            Array.Clear(_granuleValues, 0, _granuleValues.Length);
+        }
 
-    /* construct the header in temp storage */
-    Array.Copy(Encoding.ASCII.GetBytes("OggS"), 0, header, 0, 4);
-  
-    /* stream structure version */
-    header[4]=0x00;
-
-    /* continued packet flag? */
-    header[5]=0x00;
-    if((lacing_vals[0]&0x100)==0)header[5]|=0x01;
-    /* first page flag? */
-    if(b_o_s==0) header[5]|=0x02;
-    /* last page flag? */
-    if(e_o_s!=0 && lacing_fill==vals) header[5]|=0x04;
-    b_o_s=1;
-
-    /* 64 bits of PCM position */
-    for(i=6;i<14;i++){
-      header[i]=(byte)granule_pos;
-      granule_pos>>=8;
+        _serialNumber = serialNumber;
     }
 
-    /* 32 bits of stream serial number */
+    public void Clear()
     {
-      int _serialno=serialno;
-      for(i=14;i<18;i++){
-        header[i]=(byte)_serialno;
-        _serialno>>=8;
-      }
+        _bodyData = null;
+        _lacingValues = null;
+        _granuleValues = null;
     }
 
-    /* 32 bits of page counter (we have both counter and page header
-       because this val can roll over) */
-    if(pageno==-1)pageno=0;       /* because someone called
-				     stream_reset; this would be a
-				     strange thing to do in an
-				     encode stream, but it has
-				     plausible uses */
+    public int PacketIn(PacketContext packetContext)
     {
-      int _pageno=pageno++;
-      for(i=18;i<22;i++){
-        header[i]=(byte)_pageno;
-        _pageno>>=8;
-      }
+        var lacingValueCount = packetContext.Bytes / 0xFF + 1;
+
+        CompactReturnedBody();
+        ExpandBody(packetContext.Bytes);
+        ExpandLacing(lacingValueCount);
+
+        Array.Copy(packetContext.PacketBase, packetContext.PacketPos, _bodyData, _bodyFill, packetContext.Bytes);
+        _bodyFill += packetContext.Bytes;
+
+        var lacingIndex = _lacingFill;
+        for (var i = 0; i < lacingValueCount - 1; i++)
+        {
+            _lacingValues[lacingIndex + i] = 0xFF;
+            _granuleValues[lacingIndex + i] = _granulePosition;
+        }
+
+        _lacingValues[lacingIndex + lacingValueCount - 1] = packetContext.Bytes % 0xFF;
+        _granulePosition = _granuleValues[lacingIndex + lacingValueCount - 1] = packetContext.GranulePos;
+        _lacingValues[lacingIndex] |= BeginningOfPacketFlag;
+        _lacingFill += lacingValueCount;
+
+        _packetNumber++;
+        if (packetContext.EOS != 0)
+        {
+            _endOfStream = 1;
+        }
+
+        return 0;
     }
-  
-    /* zero for computation; filled in later */
-    header[22]=0;
-    header[23]=0;
-    header[24]=0;
-    header[25]=0;
-  
-    /* segment table */
-    header[26]=(byte)vals;
-    for(i=0;i<vals;i++){
-      header[i+27]=(byte)lacing_vals[i];
-      bytes+=(header[i+27]&0xff);
+
+    public int PacketOut(PacketContext packetContext)
+    {
+        var pointer = _lacingReturned;
+        if (_lacingPacket <= pointer)
+        {
+            return 0;
+        }
+
+        if ((_lacingValues[pointer] & LostSyncFlag) != 0)
+        {
+            _lacingReturned++;
+            _packetNumber++;
+            return -1;
+        }
+
+        var size = _lacingValues[pointer] & 0xFF;
+        var bytes = size;
+
+        packetContext.PacketBase = _bodyData;
+        packetContext.PacketPos = _bodyReturned;
+        packetContext.EOS = _lacingValues[pointer] & EndOfStreamFlag;
+        packetContext.BOS = _lacingValues[pointer] & BeginningOfPacketFlag;
+
+        while (size == 0xFF)
+        {
+            var value = _lacingValues[++pointer];
+            size = value & 0xFF;
+            if ((value & EndOfStreamFlag) != 0)
+            {
+                packetContext.EOS = EndOfStreamFlag;
+            }
+
+            bytes += size;
+        }
+
+        packetContext.PacketNo = _packetNumber;
+        packetContext.GranulePos = _granuleValues[pointer];
+        packetContext.Bytes = bytes;
+
+        _bodyReturned += bytes;
+        _lacingReturned = pointer + 1;
+        _packetNumber++;
+        return 1;
     }
-  
-    /* set pointers in the ogg_page struct */
-    og.header_base=header;
-    og.header=0;
-    og.header_len=header_fill=vals+27;
-    og.body_base=body_data;
-    og.body=body_returned;
-    og.body_len=bytes;
 
-    /* advance the lacing data and set the body_returned pointer */
-  
-    lacing_fill-=vals;
-    Array.Copy(lacing_vals, vals, lacing_vals, 0, lacing_fill*4);
-    Array.Copy(granule_vals, vals, granule_vals, 0, lacing_fill*8);
-    body_returned+=bytes;
+    public int PageIn(Page page)
+    {
+        var headerBuffer = page.HeaderBuffer;
+        var headerOffset = page.HeaderOffset;
+        var bodyBuffer = page.BodyBuffer;
+        var bodyOffset = page.BodyOffset;
+        var bodySize = page.BodyLength;
+        var segmentPointer = 0;
 
-    /* calculate the checksum */
-  
-    og.checksum();
+        var version = page.Version;
+        var isContinued = page.IsContinued;
+        var isBeginningOfStream = page.IsBeginningOfStream;
+        var isEndOfStream = page.IsEndOfStream;
+        var incomingGranulePosition = page.GranulePosition;
+        var incomingSerialNumber = page.SerialNumber;
+        var incomingPageNumber = page.SequenceNumber;
+        var segmentCount = headerBuffer[headerOffset + 26] & 0xFF;
 
-    /* done */
-    return(1);
-  }
+        CompactReturnedData();
 
-  public int pageout(Page og){
+        if (incomingSerialNumber != _serialNumber || version > 0)
+        {
+            return -1;
+        }
 
-    if((e_o_s!=0&&lacing_fill!=0) ||  /* 'were done, now flush' case */
-        body_fill-body_returned> 4096 ||     /* 'page nominal size' case */
-        lacing_fill>=255 ||          /* 'segment table full' case */
-        (lacing_fill!=0&&b_o_s==0)){  /* 'initial header page' case */
-      return flush(og);
+        ExpandLacing(segmentCount + 1);
+
+        if (incomingPageNumber != _pageNumber)
+        {
+            RollbackPartialPacket();
+
+            if (_pageNumber != -1)
+            {
+                _lacingValues[_lacingFill++] = LostSyncFlag;
+                _lacingPacket++;
+            }
+        }
+
+        if (isContinued && (_lacingFill < 1 || _lacingValues[_lacingFill - 1] == LostSyncFlag))
+        {
+            isBeginningOfStream = false;
+
+            for (; segmentPointer < segmentCount; segmentPointer++)
+            {
+                var value = headerBuffer[headerOffset + OggPageHeader.Length + segmentPointer] & 0xFF;
+                bodyOffset += value;
+                bodySize -= value;
+
+                if (value < 0xFF)
+                {
+                    segmentPointer++;
+                    break;
+                }
+            }
+        }
+
+        if (bodySize != 0)
+        {
+            ExpandBody(bodySize);
+            Array.Copy(bodyBuffer, bodyOffset, _bodyData, _bodyFill, bodySize);
+            _bodyFill += bodySize;
+        }
+
+        var completedPacketIndex = -1;
+        while (segmentPointer < segmentCount)
+        {
+            var value = headerBuffer[headerOffset + OggPageHeader.Length + segmentPointer] & 0xFF;
+            _lacingValues[_lacingFill] = value;
+            _granuleValues[_lacingFill] = -1;
+
+            if (isBeginningOfStream)
+            {
+                _lacingValues[_lacingFill] |= BeginningOfPacketFlag;
+                isBeginningOfStream = false;
+            }
+
+            if (value < 0xFF)
+            {
+                completedPacketIndex = _lacingFill;
+            }
+
+            _lacingFill++;
+            segmentPointer++;
+
+            if (value < 0xFF)
+            {
+                _lacingPacket = _lacingFill;
+            }
+        }
+
+        if (completedPacketIndex != -1)
+        {
+            _granuleValues[completedPacketIndex] = incomingGranulePosition;
+        }
+
+        if (isEndOfStream)
+        {
+            _endOfStream = 1;
+            if (_lacingFill > 0)
+            {
+                _lacingValues[_lacingFill - 1] |= EndOfStreamFlag;
+            }
+        }
+
+        _pageNumber = incomingPageNumber + 1;
+        return 0;
     }
-    return 0;
-  }
 
-  public int eof(){
-    return e_o_s;
-  }
+    public int Flush(Page page)
+    {
+        var segmentCount = Math.Min(_lacingFill, MaxPageSegments);
+        if (segmentCount == 0)
+        {
+            return 0;
+        }
 
-  public int reset(){
-    body_fill=0;
-    body_returned=0;
+        var accumulatedBytes = 0;
+        var granulePositionForPage = _granuleValues[0];
+        var valuesToFlush = 0;
 
-    lacing_fill=0;
-    lacing_packet=0;
-    lacing_returned=0;
+        if (_beginningOfStream == 0)
+        {
+            granulePositionForPage = 0;
+            for (; valuesToFlush < segmentCount; valuesToFlush++)
+            {
+                if ((_lacingValues[valuesToFlush] & 0xFF) == 0xFF)
+                {
+                    continue;
+                }
+                
+                valuesToFlush++;
+                break;
+            }
+        }
+        else
+        {
+            for (; valuesToFlush < segmentCount; valuesToFlush++)
+            {
+                if (accumulatedBytes > NominalPageBodySize)
+                {
+                    break;
+                }
 
-    header_fill=0;
+                accumulatedBytes += _lacingValues[valuesToFlush] & 0xFF;
+                granulePositionForPage = _granuleValues[valuesToFlush];
+            }
+        }
 
-    e_o_s=0;
-    b_o_s=0;
-    pageno=-1;
-    packetno=0;
-    granulepos=0;
-    return(0);
-  }
+        WriteHeader(valuesToFlush, granulePositionForPage, out var bytes);
+
+        page.SetData(_headerBuffer, 0, _headerFill, _bodyData, _bodyReturned, bytes);
+
+        _lacingFill -= valuesToFlush;
+        Array.Copy(_lacingValues, valuesToFlush, _lacingValues, 0, _lacingFill);
+        Array.Copy(_granuleValues, valuesToFlush, _granuleValues, 0, _lacingFill);
+        _bodyReturned += bytes;
+
+        page.WriteChecksum();
+        return 1;
+    }
+
+    public int PageOut(Page page)
+    {
+        if ((_endOfStream != 0 && _lacingFill != 0) || _bodyFill - _bodyReturned > NominalPageBodySize || _lacingFill >= MaxPageSegments || (_lacingFill != 0 && _beginningOfStream == 0))
+        {
+            return Flush(page);
+        }
+
+        return 0;
+    }
+
+    public void Reset()
+    {
+        _bodyFill = 0;
+        _bodyReturned = 0;
+        _lacingFill = 0;
+        _lacingPacket = 0;
+        _lacingReturned = 0;
+        _headerFill = 0;
+        _endOfStream = 0;
+        _beginningOfStream = 0;
+        _pageNumber = -1;
+        _packetNumber = 0;
+        _granulePosition = 0;
+    }
+
+    private void InitializeStorage()
+    {
+        _bodyStorage = InitialBodyStorage;
+        _bodyData = new byte[_bodyStorage];
+        _lacingStorage = InitialLacingStorage;
+        _lacingValues = new int[_lacingStorage];
+        _granuleValues = new long[_lacingStorage];
+    }
+
+    private void ExpandBody(int needed)
+    {
+        if (_bodyStorage > _bodyFill + needed)
+        {
+            return;
+        }
+
+        _bodyStorage += needed + 1024;
+        var buffer = new byte[_bodyStorage];
+        Array.Copy(_bodyData, 0, buffer, 0, _bodyData.Length);
+        _bodyData = buffer;
+    }
+
+    private void ExpandLacing(int needed)
+    {
+        if (_lacingStorage > _lacingFill + needed)
+        {
+            return;
+        }
+
+        _lacingStorage += needed + 32;
+
+        var lacingBuffer = new int[_lacingStorage];
+        Array.Copy(_lacingValues, 0, lacingBuffer, 0, _lacingValues.Length);
+        _lacingValues = lacingBuffer;
+
+        var granuleBuffer = new long[_lacingStorage];
+        Array.Copy(_granuleValues, 0, granuleBuffer, 0, _granuleValues.Length);
+        _granuleValues = granuleBuffer;
+    }
+
+    private void CompactReturnedBody()
+    {
+        if (_bodyReturned == 0)
+        {
+            return;
+        }
+
+        _bodyFill -= _bodyReturned;
+        if (_bodyFill != 0)
+        {
+            Array.Copy(_bodyData, _bodyReturned, _bodyData, 0, _bodyFill);
+        }
+
+        _bodyReturned = 0;
+    }
+
+    private void CompactReturnedData()
+    {
+        CompactReturnedBody();
+
+        if (_lacingReturned == 0)
+        {
+            return;
+        }
+
+        var remaining = _lacingFill - _lacingReturned;
+        if (remaining != 0)
+        {
+            Array.Copy(_lacingValues, _lacingReturned, _lacingValues, 0, remaining);
+            Array.Copy(_granuleValues, _lacingReturned, _granuleValues, 0, remaining);
+        }
+
+        _lacingFill -= _lacingReturned;
+        _lacingPacket -= _lacingReturned;
+        _lacingReturned = 0;
+    }
+
+    private void RollbackPartialPacket()
+    {
+        for (var i = _lacingPacket; i < _lacingFill; i++)
+        {
+            _bodyFill -= _lacingValues[i] & 0xff;
+        }
+
+        _lacingFill = _lacingPacket;
+    }
+
+    private void WriteHeader(int valuesToFlush, long granulePositionForPage, out int bodyBytes)
+    {
+        Array.Copy(BitConverter.GetBytes(OggPageHeader.CapturePatternValue), 0, _headerBuffer, 0, 4);
+        _headerBuffer[4] = 0x00;
+        _headerBuffer[5] = 0x00;
+        if ((_lacingValues[0] & BeginningOfPacketFlag) == 0)
+        {
+            _headerBuffer[5] |= 0x01;
+        }
+
+        if (_beginningOfStream == 0)
+        {
+            _headerBuffer[5] |= 0x02;
+        }
+
+        if (_endOfStream != 0 && _lacingFill == valuesToFlush)
+        {
+            _headerBuffer[5] |= 0x04;
+        }
+
+        _beginningOfStream = 1;
+        for (var i = 6; i < 14; i++)
+        {
+            _headerBuffer[i] = (byte)granulePositionForPage;
+            granulePositionForPage >>= 8;
+        }
+
+        var serial = _serialNumber;
+        for (var i = 14; i < 18; i++)
+        {
+            _headerBuffer[i] = (byte)serial;
+            serial >>= 8;
+        }
+
+        if (_pageNumber == -1)
+        {
+            _pageNumber = 0;
+        }
+
+        var pageSequenceNumber = _pageNumber++;
+        for (var i = 18; i < 22; i++)
+        {
+            _headerBuffer[i] = (byte)pageSequenceNumber;
+            pageSequenceNumber >>= 8;
+        }
+
+        _headerBuffer[22] = 0;
+        _headerBuffer[23] = 0;
+        _headerBuffer[24] = 0;
+        _headerBuffer[25] = 0;
+
+        _headerBuffer[26] = (byte)valuesToFlush;
+        bodyBytes = 0;
+        for (var i = 0; i < valuesToFlush; i++)
+        {
+            _headerBuffer[i + OggPageHeader.Length] = (byte)_lacingValues[i];
+            bodyBytes += _headerBuffer[i + OggPageHeader.Length] & 0xff;
+        }
+
+        _headerFill = valuesToFlush + OggPageHeader.Length;
+    }
 }
