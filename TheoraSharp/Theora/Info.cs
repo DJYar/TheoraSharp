@@ -37,7 +37,7 @@ public class Info
   internal int MaxQMatrixIndex;
   internal short[] qmats;
 
-  internal HuffEntry[] HuffRoot = new HuffEntry[Huffman.NUM_HUFF_TABLES];
+  internal PackedHuffmanTree[] HuffRoot = new PackedHuffmanTree[Huffman.NUM_HUFF_TABLES];
   internal byte[] LoopFilterLimitValues = new byte[Constants.Q_TABLE_SIZE];
 
   public Info()

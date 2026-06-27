@@ -152,11 +152,8 @@ internal class Playback
   /* Dequantiser and rounding tables */
   int[]   	quant_index = new int[64];
 
-  internal HuffEntry[]   HuffRoot_VP3x = new HuffEntry[Huffman.NUM_HUFF_TABLES];
-  int[][] 	HuffCodeArray_VP3x;
-  byte[][] 	HuffCodeLengthArray_VP3x;
-  internal byte[]   	ExtraBitLengths_VP3x;
- 
+  internal readonly PackedHuffmanTree[] HuffRoot_VP3x = new PackedHuffmanTree[Huffman.NUM_HUFF_TABLES];
+  internal byte[] ExtraBitLengths_VP3x;
 
   internal void clear()
   {
@@ -215,46 +212,17 @@ internal class Playback
   internal void clearHuffmanSet()
   {
     Huffman.clearHuffmanTrees(HuffRoot_VP3x);
-
-    HuffCodeArray_VP3x = null;
-    HuffCodeLengthArray_VP3x = null;
   }
 
   internal void initHuffmanSet()
   {
     clearHuffmanSet();
-
     ExtraBitLengths_VP3x = HuffTables.ExtraBitLengths_VP31;
-
-    HuffCodeArray_VP3x = new int[Huffman.NUM_HUFF_TABLES][];
-    for (int i = 0; i < Huffman.NUM_HUFF_TABLES; i++)
-    {
-      HuffCodeArray_VP3x[i] = new int[Huffman.MAX_ENTROPY_TOKENS];
-    }
-    HuffCodeLengthArray_VP3x = new byte[Huffman.NUM_HUFF_TABLES][];
-    for (int i = 0; i < Huffman.NUM_HUFF_TABLES; i++)
-    {
-      HuffCodeLengthArray_VP3x[i] = new byte[Huffman.MAX_ENTROPY_TOKENS];
-    }
-
-    for (int i = 0; i < Huffman.NUM_HUFF_TABLES; i++ ){
-      Huffman.buildHuffmanTree(HuffRoot_VP3x,
-                       HuffCodeArray_VP3x[i],
-                       HuffCodeLengthArray_VP3x[i],
-                       i, HuffTables.FrequencyCounts_VP3[i]);
-    }
   }
 
-  internal int readHuffmanTrees(Info ci, Buffer opb) {
-    int i;
-    for (i=0; i<Huffman.NUM_HUFF_TABLES; i++) {
-       int ret;
-       ci.HuffRoot[i] = new HuffEntry();
-       ret = ci.HuffRoot[i].Read(0, opb);
-       if (ret != 0) 
-         return ret;
-    }
-    return 0;
+  internal int readHuffmanTrees(Info ci, Buffer opb)
+  {
+    return Huffman.readHuffmanTrees(ci.HuffRoot, opb);
   }
 
   internal void initHuffmanTrees(Info ci) 
@@ -262,7 +230,7 @@ internal class Playback
     int i;
     ExtraBitLengths_VP3x = HuffTables.ExtraBitLengths_VP31;
     for(i=0; i<Huffman.NUM_HUFF_TABLES; i++){
-      HuffRoot_VP3x[i] = ci.HuffRoot[i].Copy();
+      HuffRoot_VP3x[i] = ci.HuffRoot[i];
     }
   }
 }

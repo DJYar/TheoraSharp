@@ -233,4 +233,27 @@ internal class Huffman
       huffRoot[i] = null;
     }
   }
+  
+  internal static int readHuffmanTrees(PackedHuffmanTree[] huffRoot, Buffer opb)
+  {
+    for (int i = 0; i < NUM_HUFF_TABLES; i++)
+    {
+      int result = PackedHuffmanTree.Read(
+        opb,
+        out huffRoot[i]);
+
+      if (result != 0)
+        return result;
+    }
+
+    return 0;
+  }
+
+  internal static void clearHuffmanTrees(PackedHuffmanTree[] huffRoot)
+  {
+    for (int i = 0; i < NUM_HUFF_TABLES; i++)
+    {
+      huffRoot[i] = null;
+    }
+  }
 }

@@ -646,15 +646,9 @@ internal sealed class Decode
     }
   }
 
-  private int ExtractToken(Buffer opb,
-                        HuffEntry CurrentRoot){
-    /* Loop searches down through tree based upon bits read from the
-       bitstream */
-    /* until it hits a leaf at which point we have decoded a token */
-    while (CurrentRoot.Value < 0 ){
-      CurrentRoot = CurrentRoot.Child[(int)opb.ReadB(1)];
-    }
-    return CurrentRoot.Value;
+  private static int ExtractToken(Buffer opb, PackedHuffmanTree tree)
+  {
+    return tree.Decode(opb);
   }
 
   private void unpackAndExpandToken(short[] ExpandedBlock,
@@ -664,7 +658,11 @@ internal sealed class Decode
     int          ExtraBits = 0;
 
     int Token = ExtractToken(pbi.opb, pbi.HuffRoot_VP3x[HuffChoice]);
-
+    if (Token < 0)
+    {
+      throw new InvalidDataException("Unexpected end of Huffman-coded packet.");
+    }
+    
     /* Now.. if we are using the DCT optimised coding system, extract any
      *  assosciated additional bits token.
      */

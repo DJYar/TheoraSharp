@@ -207,6 +207,62 @@ internal class Buffer
         endbit = bits&7;
         return (int)(ret);
     }
+    
+    public bool CanReadBits(int bits)
+    {
+        if (bits < 0)
+            return false;
+
+        long currentBit = (long)endbyte * 8 + endbit;
+        long totalBits = (long)storage * 8;
+
+        return currentBit + bits <= totalBits;
+    }
+
+    public int LookB(int bits)
+    {
+        if ((uint)bits > 32U)
+            throw new ArgumentOutOfRangeException(nameof(bits));
+
+        if (bits == 0)
+            return 0;
+
+        int bitsIncludingOffset = bits + endbit;
+        uint ret = 0;
+
+        if (endbyte < storage)
+        {
+            ret = (uint)(buffer[ptr] & 0xFF) << (24 + endbit);
+        }
+
+        if (bitsIncludingOffset > 8 && endbyte + 1 < storage)
+        {
+            ret |= (uint)(buffer[ptr + 1] & 0xFF)
+                   << (16 + endbit);
+        }
+
+        if (bitsIncludingOffset > 16 && endbyte + 2 < storage)
+        {
+            ret |= (uint)(buffer[ptr + 2] & 0xFF)
+                   << (8 + endbit);
+        }
+
+        if (bitsIncludingOffset > 24 && endbyte + 3 < storage)
+        {
+            ret |= (uint)(buffer[ptr + 3] & 0xFF)
+                   << endbit;
+        }
+
+        if (bitsIncludingOffset > 32 &&
+            endbit != 0 &&
+            endbyte + 4 < storage)
+        {
+            ret |= (uint)(buffer[ptr + 4] & 0xFF)
+                   >> (8 - endbit);
+        }
+
+        return (int)(ret >> (32 - bits));
+    }
 
     public int ReadB(int bits)
     {
