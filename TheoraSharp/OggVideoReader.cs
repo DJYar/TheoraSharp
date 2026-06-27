@@ -8,11 +8,18 @@ public class OggVideoReader
 
     private readonly int _bufferSize = DEFAULT_BUFFER_SIZE;
     private readonly Stream _inputStream;
+    private readonly List<IAudioDecoder> _audioDecoders = new();
+    private readonly List<DecodedAudioChunk> _audioChunks = new();
     private IVideoDecoder _decoder;
 
     public int Width => _decoder?.Width ?? 0;
     public int Height => _decoder?.Height ?? 0;
     public float Fps => _decoder?.Fps ?? 0;
+    public int AudioSampleRate => _audioDecoders.Count == 0 ? 0 : _audioDecoders[0].SampleRate;
+    public int AudioChannels => _audioDecoders.Count == 0 ? 0 : _audioDecoders[0].Channels;
+    public long AudioSampleCount => _audioDecoders.Sum(decoder => decoder.TotalSamples);
+    public IReadOnlyList<IAudioDecoder> AudioDecoders => _audioDecoders;
+    public IReadOnlyList<DecodedAudioChunk> AudioChunks => _audioChunks;
     
     public OggVideoReader(Stream input, int bufferSize = DEFAULT_BUFFER_SIZE)
     {
@@ -121,7 +128,20 @@ public class OggVideoReader
 
                         if (currentStream.Decoder.ReadPacket(packet))
                         {
-                            yield return currentStream.Decoder.GetData<T>();
+                            if (currentStream.Decoder is IAudioDecoder audioDecoder)
+                            {
+                                AddAudioChunks(audioDecoder);
+                            }
+
+                            var data = currentStream.Decoder.GetData<T>();
+                            if (data != null)
+                            {
+                                yield return data;
+                            }
+                        }
+                        else if (currentStream.Decoder is IAudioDecoder audioDecoder)
+                        {
+                            AddAudioChunks(audioDecoder);
                         }
                     }
                 }
@@ -129,21 +149,32 @@ public class OggVideoReader
         }
     }
 
+    private void AddAudioChunks(IAudioDecoder decoder)
+    {
+        foreach (var chunk in decoder.LastAudioChunks)
+        {
+            _audioChunks.Add(chunk);
+        }
+    }
+
     private void SetupDecoder(OggStream stream, byte streamType)
     {
         const byte VorbisAudio = 0x76;
         const byte SmokeVideo = 0x73;
-        const byte TheoraAudio = 0x74;
+        const byte TheoraVideo = 0x74;
         
         switch (streamType)
         {
             case VorbisAudio:
                 // vorbis audio
+                var audioDecoder = new VorbisAudioDec();
+                _audioDecoders.Add(audioDecoder);
+                stream.Decoder ??= audioDecoder;
                 break;
             case SmokeVideo:
                 // smoke video
                 break;
-            case TheoraAudio:
+            case TheoraVideo:
                 // theora video
                 _decoder ??= new TheoraDec();
                 stream.Decoder ??= _decoder;
