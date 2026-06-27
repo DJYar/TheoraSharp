@@ -593,7 +593,7 @@ public class VorbisFile : IDisposable
         return _comments;
     }
 
-    public int Clear()
+    public void Clear()
     {
         _block.Clear();
         _dspState.Clear();
@@ -626,8 +626,6 @@ public class VorbisFile : IDisposable
         _currentLink = 0;
         _bitTrack = 0;
         _sampleTrack = 0;
-
-        return 0;
     }
 
     public void Dispose()
