@@ -7,6 +7,9 @@
 
     <PropertyGroup>
         <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+        <GenerateDocumentationFile>True</GenerateDocumentationFile>
+        <IncludeSymbols>True</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <Title>TheoraSharp</Title>
         <Description></Description>
         <Authors>Schtainhardt</Authors>
@@ -15,6 +18,5 @@
         <PackageLicenseExpression>LGPL-2.1-or-later</PackageLicenseExpression>
         <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
         <PackageProjectUrl>https://github.com/DJYar/TheoraSharp/</PackageProjectUrl>
-        <GenerateDocumentationFile>True</GenerateDocumentationFile>
     </PropertyGroup>
 </Project>
