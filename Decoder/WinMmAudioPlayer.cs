@@ -15,6 +15,7 @@ internal sealed class WinMmAudioPlayer : IDisposable
 
     public int SampleRate { get; }
     public int Channels { get; }
+    public int PendingBuffers => Volatile.Read(ref _pendingBuffers);
     
     public WinMmAudioPlayer(int sampleRate, int channels)
     {

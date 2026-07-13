@@ -39,7 +39,7 @@ public class OggVideoReader
         _inputStream = File.OpenRead(fileName);
     }
 
-    public IEnumerator<T[]> StartReading<T>(bool throwOnCorruptedPacket = true)
+    public IEnumerator<T[]> StartReading<T>(bool throwOnCorruptedPacket = true, bool yieldOnAudio = false)
     {
         var page = new Page();
         var packet = new PacketContext();
@@ -128,9 +128,10 @@ public class OggVideoReader
 
                         if (currentStream.Decoder.ReadPacket(packet))
                         {
+                            var addedAudio = false;
                             if (currentStream.Decoder is IAudioDecoder audioDecoder)
                             {
-                                AddAudioChunks(audioDecoder);
+                                addedAudio = AddAudioChunks(audioDecoder);
                             }
 
                             var data = currentStream.Decoder.GetData<T>();
@@ -138,10 +139,17 @@ public class OggVideoReader
                             {
                                 yield return data;
                             }
+                            else if (yieldOnAudio && addedAudio)
+                            {
+                                yield return null;
+                            }
                         }
                         else if (currentStream.Decoder is IAudioDecoder audioDecoder)
                         {
-                            AddAudioChunks(audioDecoder);
+                            if (yieldOnAudio && AddAudioChunks(audioDecoder))
+                            {
+                                yield return null;
+                            }
                         }
                     }
                 }
@@ -149,12 +157,16 @@ public class OggVideoReader
         }
     }
 
-    private void AddAudioChunks(IAudioDecoder decoder)
+    private bool AddAudioChunks(IAudioDecoder decoder)
     {
+        var added = false;
         foreach (var chunk in decoder.LastAudioChunks)
         {
             _audioChunks.Add(chunk);
+            added = true;
         }
+
+        return added;
     }
 
     private void SetupDecoder(OggStream stream, byte streamType)

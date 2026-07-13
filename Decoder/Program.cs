@@ -8,6 +8,7 @@ using TheoraSharp;
 public static class Program
 {
     private const int MaxRenderWidth = 160;
+    private const int MaxPendingAudioBuffers = 32;
 
     public static void Main(string[] args)
     {
@@ -24,7 +25,7 @@ public static class Program
     private static async Task Play(string fileName)
     {
         var source = new OggVideoReader(fileName);
-        using var reader = source.StartReading<uint>(throwOnCorruptedPacket: false);
+        using var reader = source.StartReading<uint>(throwOnCorruptedPacket: false, yieldOnAudio: true);
 
         var frames = new Queue<uint[]>();
         var eof = false;
@@ -34,7 +35,7 @@ public static class Program
 
         try
         {
-            eof = !FillFrameQueue(reader, source, frames, 1, false, ref audioCursor, ref audioPlayer, ref audioDisabled);
+            eof = !FillFrameQueue(reader, source, frames, 1, true, ref audioCursor, ref audioPlayer, ref audioDisabled);
             if (Console.IsOutputRedirected)
             {
                 DecodeWithoutRendering(reader, source, frames, ref eof, ref audioCursor, ref audioPlayer, ref audioDisabled);
@@ -143,6 +144,7 @@ public static class Program
             {
                 audioPlayer ??= new WinMmAudioPlayer(chunk.SampleRate, chunk.Channels);
                 audioPlayer.Queue(chunk);
+                WaitForAudioBufferRoom(audioPlayer);
             }
             catch
             {
@@ -152,6 +154,14 @@ public static class Program
                 audioCursor = source.AudioChunks.Count;
                 return;
             }
+        }
+    }
+
+    private static void WaitForAudioBufferRoom(WinMmAudioPlayer audioPlayer)
+    {
+        while (audioPlayer.PendingBuffers >= MaxPendingAudioBuffers)
+        {
+            Thread.Sleep(10);
         }
     }
 
