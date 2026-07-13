@@ -3,9 +3,6 @@
     <PropertyGroup>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
-        <PackageLicenseUrl>https://github.com/DJYar/TheoraSharp/blob/main/LICENSE.md</PackageLicenseUrl>
-        <RepositoryUrl>https://github.com/DJYar/TheoraSharp.git</RepositoryUrl>
-        <RepositoryType>git</RepositoryType>
     </PropertyGroup>
 
     <PropertyGroup>
@@ -21,5 +18,7 @@
         <PackageLicenseExpression>LGPL-2.1-or-later</PackageLicenseExpression>
         <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
         <PackageProjectUrl>https://github.com/DJYar/TheoraSharp/</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/DJYar/TheoraSharp.git</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
     </PropertyGroup>
 </Project>
