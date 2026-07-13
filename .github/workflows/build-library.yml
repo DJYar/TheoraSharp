@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: "Build application"
+
+on:
+    push:
+        branches:
+            - "**"
+        paths:
+            - ".github/workflows/**"
+            - "Decoder/**"
+            - "TheoraSharp/**"
+            - "*.sln"
+            - "*.slnx"
+            - "*.slnf"
+            - "*.config"
+            - "*.props"
+            - "*.targets"
+    pull_request:
+        branches:
+            - "**"
+        paths:
+            - ".github/workflows/**"
+            - "Decoder/**"
+            - "TheoraSharp/**"
+            - "*.sln"
+            - "*.slnx"
+            - "*.slnf"
+            - "*.config"
+            - "*.props"
+            - "*.targets"
+
+defaults:
+    run:
+        shell: pwsh
+
+jobs:
+    build-library:
+        name: 'Build library'
+
+        strategy:
+            matrix:
+                system:
+                    - windows-2022
+                    - ubuntu-22.04
+                config:
+                    - Debug
+                    - Release
+
+        runs-on: ${{ matrix.system }}
+
+        env:
+            THEORASHARP_SOLUTION: TheoraSharp.sln
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v5
+              with:
+                  dotnet-version: |
+                      6.0.x
+                      8.0.x
+                      10.0.x
+
+            - name: Cache packages
+              uses: actions/cache@v6
+              with:
+                  key: Library-${{ runner.os }}-${{ hashFiles('**/Directory.Packages.props') }}
+                  restore-keys: |
+                      Library-${{ runner.os }}-${{ hashFiles('**/Directory.Packages.props') }}
+                      Library-${{ runner.os }}-
+                      Library-
+                  path: |
+                      ~/.nuget/packages
+
+            - name: Restore packages
+              run: |
+                  dotnet restore `
+                      $Env:THEORASHARP_SOLUTION
+
+            - name: Build library
+              run: |
+                  dotnet build `
+                      $Env:THEORASHARP_SOLUTION `
+                      --configuration ${{ matrix.config }} `
+                      --no-restore
+
+            - name: Upload library
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ github.event.repository.name }}-build-${{ matrix.system }}-${{ github.sha }}
+                  path: |
+                      ${{ github.workspace }}/bin/
