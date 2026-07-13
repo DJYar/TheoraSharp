@@ -14,7 +14,7 @@
         <Description>A managed C# reader and decoder for Ogg streams containing Theora video and Vorbis audio.</Description>
         <Authors>Schtainhardt</Authors>
         <PackageTags></PackageTags>
-        <Version>0.1.0-beta.1</Version>
+        <Version>0.1.0-beta.2</Version>
         <PackageLicenseExpression>LGPL-2.1-or-later</PackageLicenseExpression>
         <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
         <PackageProjectUrl>https://github.com/DJYar/TheoraSharp/</PackageProjectUrl>
