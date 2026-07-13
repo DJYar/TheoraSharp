@@ -92,6 +92,6 @@ jobs:
             - name: Upload library
               uses: actions/upload-artifact@v7
               with:
-                  name: ${{ github.event.repository.name }}-build-${{ matrix.system }}-${{ github.sha }}
+                  name: ${{ github.event.repository.name }}-build-${{ matrix.system }}-${{ matrix.config }}-${{ github.sha }}
                   path: |
                       ${{ github.workspace }}/bin/
