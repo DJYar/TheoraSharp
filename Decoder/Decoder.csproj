@@ -1,5 +1,5 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <Project Sdk="Microsoft.NET.Sdk">
-
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <TargetFramework>net9.0</TargetFramework>
@@ -8,17 +8,16 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
-    <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
-      <Optimize>true</Optimize>
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+        <Optimize>true</Optimize>
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\TheoraSharp\TheoraSharp.csproj" />
+        <ProjectReference Include="..\TheoraSharp\TheoraSharp.csproj" />
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="SixLabors.ImageSharp" Version="2.1.1" />
-      <PackageReference Include="Spectre.Console.ImageSharp" Version="0.44.0" />
+        <PackageReference Include="SixLabors.ImageSharp" />
+        <PackageReference Include="Spectre.Console.ImageSharp" />
     </ItemGroup>
-
 </Project>
